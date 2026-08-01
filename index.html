@@ -727,7 +727,7 @@ function seed() {
     }],
     titrations: [],
     pauses: [],
-    lifespanDays: 28,
+    lifespanDays: 31,
     status: 'active'
   }, {
     id: 'selank',
@@ -757,7 +757,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 28,
+    lifespanDays: 31,
     status: 'active'
   }, {
     id: 'kiss',
@@ -786,7 +786,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 28,
+    lifespanDays: 31,
     status: 'active'
   }];
   return {
@@ -4080,7 +4080,7 @@ function ReconWizard({
   const peptides = data.protocols.filter(p => p.kind === 'peptide');
   const [step, setStep] = useState(1);
   const [name, setName] = useState(peptides[0] ? peptides[0].name : '');
-  const [lifespan, setLifespan] = useState(peptides[0] ? peptides[0].lifespanDays : 28);
+  const [lifespan, setLifespan] = useState(peptides[0] ? peptides[0].lifespanDays : 31);
   const [reorderAt, setReorderAt] = useState(5);
   const [reconDate, setReconDate] = useState(keyOf(logicalNow()));
   const sel = peptides.find(x => x.name === name);
@@ -4317,7 +4317,7 @@ function ProtocolBuilder({
     cycleUnit: initial.schedule.cycleUnit || 'days',
     days: initial.schedule.days || [],
     skipWeekends: !!initial.skipWeekends,
-    lifespanDays: initial.lifespanDays || 28,
+    lifespanDays: initial.lifespanDays || 31,
     startDate: initial.startDate || '',
     endDate: initial.endDate || '',
     courseWeeks: initial.courseWeeks || ''
@@ -4340,7 +4340,7 @@ function ProtocolBuilder({
     cycleUnit: 'days',
     days: [],
     skipWeekends: false,
-    lifespanDays: 28,
+    lifespanDays: 31,
     startDate: '',
     endDate: '',
     courseWeeks: ''
