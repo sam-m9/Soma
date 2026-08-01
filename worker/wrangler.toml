@@ -1,0 +1,13 @@
+name = "soma-api"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Every 5 minutes: check for doses due right now and push a reminder.
+# Once daily (13:00 UTC by default): back up app state to Google Drive.
+# Adjust the daily time to whenever suits you — it's just a cron string.
+[triggers]
+crons = ["*/5 * * * *", "0 13 * * *"]
+
+[[kv_namespaces]]
+binding = "SOMA_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

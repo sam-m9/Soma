@@ -806,6 +806,17 @@ function seed() {
    PERSISTENCE
    ============================================================ */
 const STORE_KEY = 'soma-v1';
+const CLOUD_CFG_KEY = 'soma-cloud-cfg';
+// Public VAPID key for Web Push — safe to expose; paired with a private key held only in the Worker.
+const VAPID_PUBLIC_KEY = 'BME5aepc23cm_AKyxh5IfR-AcJtYSR-yApWVBCmcXTUKFjlwqmfRGb7swtb8lMceHnAgH8gkJJ0tidKK-uMky4c';
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
 const SEED_VERSION = 5; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
@@ -3269,6 +3280,12 @@ function PlansTab({
     setData: setData
   }), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: 20
+    }
+  }, /*#__PURE__*/React.createElement(CloudSync, {
+    data: data
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
       background: '#fff',
       border: '1px solid var(--hair)',
       borderRadius: 18,
@@ -5037,6 +5054,266 @@ function Seg({
   }, l)));
 }
 
+/* ---- Cloud sync: real push reminders + automatic Google Drive backup, via the soma-api Worker ---- */
+function loadCloudCfg() {
+  try {
+    return JSON.parse(localStorage.getItem(CLOUD_CFG_KEY)) || { apiUrl: '', apiKey: '' };
+  } catch (e) {
+    return { apiUrl: '', apiKey: '' };
+  }
+}
+function CloudSync({
+  data
+}) {
+  const [cfg, setCfg] = useState(loadCloudCfg);
+  const [editing, setEditing] = useState(!loadCloudCfg().apiUrl);
+  const [draftUrl, setDraftUrl] = useState(cfg.apiUrl);
+  const [draftKey, setDraftKey] = useState(cfg.apiKey);
+  const [msg, setMsg] = useState('');
+  const [pushStatus, setPushStatus] = useState('unknown');
+  const [backupStatus, setBackupStatus] = useState(null);
+  const base = () => cfg.apiUrl.replace(/\/$/, '');
+  const authed = () => !!(cfg.apiUrl && cfg.apiKey);
+
+  const refreshBackupStatus = () => {
+    if (!authed()) return;
+    fetch(base() + '/api/backup/status', {
+      headers: {
+        Authorization: 'Bearer ' + cfg.apiKey
+      }
+    }).then(r => r.json()).then(setBackupStatus).catch(() => {});
+  };
+  useEffect(refreshBackupStatus, [cfg.apiUrl, cfg.apiKey]);
+
+  // Push whatever changes locally up to the Worker (debounced) so the cron-driven
+  // reminders and Drive backups always act on your latest protocols and logs.
+  useEffect(() => {
+    if (!authed()) return;
+    const t = setTimeout(() => {
+      fetch(base() + '/api/state', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + cfg.apiKey
+        },
+        body: JSON.stringify(data)
+      }).catch(() => {});
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [data, cfg.apiUrl, cfg.apiKey]);
+
+  const saveCfg = () => {
+    const next = {
+      apiUrl: draftUrl.trim(),
+      apiKey: draftKey.trim()
+    };
+    setCfg(next);
+    try {
+      localStorage.setItem(CLOUD_CFG_KEY, JSON.stringify(next));
+    } catch (e) {}
+    setEditing(false);
+    setMsg('Saved. Reminders and backup will use this Worker from now on.');
+  };
+
+  const enablePush = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatus('unsupported');
+      setMsg('This browser does not support push notifications. On iPhone, add Soma to the Home Screen first (iOS 16.4+), then open it from there.');
+      return;
+    }
+    if (!authed()) {
+      setMsg('Save your Worker URL and key first.');
+      return;
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        setPushStatus('denied');
+        setMsg('Notification permission was not granted.');
+        return;
+      }
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      await fetch(base() + '/api/push/subscribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + cfg.apiKey
+        },
+        body: JSON.stringify({
+          subscription: sub,
+          timezone
+        })
+      });
+      setPushStatus('enabled');
+      setMsg('Push reminders enabled for ' + timezone + '. Doses fire at each protocol’s scheduled time.');
+    } catch (e) {
+      setMsg('Could not enable push: ' + ((e && e.message) || e));
+    }
+  };
+
+  const testPush = () => {
+    fetch(base() + '/api/push/test', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + cfg.apiKey
+      }
+    }).then(r => r.json()).then(r => setMsg(r.ok ? 'Test push sent — check your device.' : 'Test push failed: ' + JSON.stringify(r))).catch(() => setMsg('Test push failed.'));
+  };
+
+  const connectDrive = () => {
+    window.open(base() + '/auth/google/start?key=' + encodeURIComponent(cfg.apiKey), '_blank');
+  };
+
+  const backupNow = () => {
+    setMsg('Backing up…');
+    fetch(base() + '/api/backup/run', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + cfg.apiKey
+      }
+    }).then(r => r.json()).then(r => {
+      setMsg(r.ok ? 'Backed up to Google Drive.' : 'Backup failed: ' + (r.error || 'unknown error'));
+      refreshBackupStatus();
+    }).catch(() => setMsg('Backup failed.'));
+  };
+
+  const pillBtn = {
+    fontFamily: 'var(--mono)',
+    fontSize: 10.5,
+    letterSpacing: '.08em',
+    padding: '6px 14px',
+    borderRadius: 14,
+    border: '1px solid var(--sage-border)',
+    background: 'var(--sage-tint)',
+    color: 'var(--sage)',
+    cursor: 'pointer'
+  };
+  const ghostBtn = {
+    ...pillBtn,
+    background: 'transparent',
+    border: '1px solid var(--hair)',
+    color: 'var(--secondary)'
+  };
+
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid var(--hair)',
+      borderRadius: 18,
+      padding: 22
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "serif",
+    style: {
+      fontSize: 24,
+      fontWeight: 600
+    }
+  }, "Reminders & Cloud Backup"), !editing && /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: () => {
+      setDraftUrl(cfg.apiUrl);
+      setDraftKey(cfg.apiKey);
+      setEditing(true);
+    },
+    style: ghostBtn
+  }, "Edit")), /*#__PURE__*/React.createElement("p", {
+    className: "mono",
+    style: {
+      fontSize: 12,
+      color: 'var(--secondary)',
+      lineHeight: 1.6,
+      margin: '8px 0 14px'
+    }
+  }, "Connects Soma to your soma-api Worker for real push notifications (fires even if the app is closed) and automatic Google Drive backups."), editing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    placeholder: "https://soma-api.your-subdomain.workers.dev",
+    value: draftUrl,
+    onChange: e => setDraftUrl(e.target.value),
+    style: {
+      marginBottom: 8
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    placeholder: "API key (APP_SECRET)",
+    value: draftKey,
+    onChange: e => setDraftKey(e.target.value)
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: saveCfg,
+    style: pillBtn
+  }, "Save"), !!cfg.apiUrl && /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: () => setEditing(false),
+    style: ghostBtn
+  }, "Cancel"))) : /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 12,
+      color: 'var(--secondary)',
+      wordBreak: 'break-all',
+      border: '1px solid var(--hair)',
+      borderRadius: 12,
+      padding: '10px 12px',
+      marginBottom: 14
+    }
+  }, cfg.apiUrl || 'Not connected yet.'), authed() && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: enablePush,
+    style: pillBtn
+  }, pushStatus === 'enabled' ? 'Push enabled ✓' : 'Enable push reminders'), /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: testPush,
+    style: ghostBtn
+  }, "Send test push"), /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: connectDrive,
+    style: ghostBtn
+  }, backupStatus && backupStatus.connected ? 'Reconnect Google Drive' : 'Connect Google Drive'), /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: backupNow,
+    style: ghostBtn
+  }, "Back up now")), backupStatus && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 11.5,
+      color: 'var(--secondary)',
+      marginTop: 10
+    }
+  }, backupStatus.connected ? 'Google Drive connected.' : 'Google Drive not connected.', backupStatus.lastBackup && ' Last backup: ' + new Date(backupStatus.lastBackup.at).toLocaleString() + '.')), msg && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 11.5,
+      color: 'var(--secondary)',
+      marginTop: 12,
+      lineHeight: 1.5
+    }
+  }, msg));
+}
+
 /* ---- Data backup ---- */
 function Backup({
   data,
@@ -6496,6 +6773,10 @@ function App() {
     onClose: () => setQuickAdd(null),
     setData: setData
   }));
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
 /* mount + fade splash (masks Babel compile; no window.onerror popups) */
