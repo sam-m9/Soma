@@ -10,4 +10,4 @@ crons = ["*/5 * * * *", "0 13 * * *"]
 
 [[kv_namespaces]]
 binding = "SOMA_KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "ffbead11ac564224b1b17717e3df11b7"
