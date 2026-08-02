@@ -584,6 +584,7 @@ function weeksSince(startKey, date) {
 // last active day of a protocol: explicit end date wins, else derived from start + course length
 function courseEndKey(p) {
   if (p.endDate) return p.endDate;
+  if (p.startDate && p.courseDays) return keyOf(addDays(dateFromKey(p.startDate), Number(p.courseDays) - 1));
   if (p.startDate && p.courseWeeks) return keyOf(addDays(dateFromKey(p.startDate), Number(p.courseWeeks) * 7 - 1));
   return '';
 }
@@ -701,12 +702,12 @@ function seed() {
     time: '07:30',
     route: 'SubQ',
     unit: 'U',
-    doseMcg: 800,
+    doseMcg: 1200,
     vialSizeMg: 10,
-    bacWaterMl: 3.0,
+    bacWaterMl: 2.0,
     dose: 24,
     unitsManual: null,
-    note: 'Food is fine.',
+    note: 'Morning cognitive dose. Food is fine.',
     schedule: {
       type: 'cycle',
       on: 5,
@@ -718,13 +719,7 @@ function seed() {
     startDate: '',
     endDate: '',
     courseWeeks: 8,
-    phases: [{
-      week: 1,
-      dose: 500
-    }, {
-      week: 3,
-      dose: 800
-    }],
+    phases: [],
     titrations: [],
     pauses: [],
     lifespanDays: 31,
@@ -768,9 +763,9 @@ function seed() {
     route: 'SubQ',
     unit: 'U',
     doseMcg: 100,
-    vialSizeMg: 10,
-    bacWaterMl: 5.0,
-    dose: 5,
+    vialSizeMg: 5,
+    bacWaterMl: 2.0,
+    dose: 4,
     unitsManual: null,
     note: 'Food is fine.',
     schedule: {
@@ -783,6 +778,71 @@ function seed() {
     startDate: '',
     endDate: '',
     courseWeeks: 12,
+    phases: [],
+    titrations: [],
+    pauses: [],
+    lifespanDays: 31,
+    status: 'active'
+  }, {
+    id: 'epithalon',
+    kind: 'peptide',
+    name: 'Epithalon',
+    group: 'Night',
+    time: '21:30',
+    route: 'SubQ',
+    unit: 'U',
+    doseMcg: 1000,
+    vialSizeMg: 10,
+    bacWaterMl: 2.0,
+    dose: 20,
+    unitsManual: null,
+    note: 'Priming block — 10 consecutive days, then complete. Food is fine.',
+    schedule: {
+      type: 'everyday',
+      on: 0,
+      off: 0,
+      cycleUnit: 'days',
+      anchor: '',
+      days: []
+    },
+    startDate: '',
+    endDate: '',
+    courseWeeks: 0,
+    courseDays: 10,
+    phases: [],
+    titrations: [],
+    pauses: [],
+    lifespanDays: 31,
+    status: 'active'
+  }, {
+    id: 'cjc',
+    kind: 'peptide',
+    name: 'CJC-1295 + Ipamorelin',
+    group: 'Night',
+    time: '21:30',
+    route: 'SubQ',
+    unit: 'U',
+    doseMcg: 200,
+    vialSizeMg: 10,
+    bacWaterMl: 2.0,
+    dose: 4,
+    unitsManual: null,
+    note: 'GH pulse. Fast 2 hr before and 30–45 min after (water only).',
+    fast: {
+      beforeMin: 120,
+      afterMin: 45
+    },
+    schedule: {
+      type: 'cycle',
+      on: 5,
+      off: 2,
+      cycleUnit: 'days',
+      anchor: '',
+      days: []
+    },
+    startDate: '',
+    endDate: '',
+    courseWeeks: 16,
     phases: [],
     titrations: [],
     pauses: [],
@@ -817,7 +877,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 5; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 6; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
@@ -842,6 +902,12 @@ function migrate(d) {
       fresh.status = keepStatus; // active / paused / archived is yours
       Object.keys(p).forEach(k => delete p[k]);
       Object.assign(p, fresh);
+    });
+    // Add any built-in protocols introduced in a newer seed that this saved data predates
+    // (e.g. Epithalon and CJC/Ipamorelin), so upgrades gain them without wiping user entries.
+    const haveIds = new Set(d.protocols.map(p => p.id));
+    seed().protocols.forEach(c => {
+      if (!haveIds.has(c.id)) d.protocols.push(JSON.parse(JSON.stringify(c)));
     });
     d.seedVersion = SEED_VERSION;
   }
@@ -6348,6 +6414,471 @@ function PastTab({
 }
 
 /* ============================================================
+   PEPTIDE REFERENCE DATA (one-stop protocol guide)
+   Narrative content lives here; all dosing numbers are read live
+   from the protocol objects so the guide never drifts from the plan.
+   ============================================================ */
+const PEPTIDE_REF = {
+  semax: {
+    tagline: 'Neuroplasticity & focus',
+    mechanism: 'Upregulates Brain-Derived Neurotrophic Factor (BDNF) and its TrkB receptor; modulates astrocytic melanocortin-4 (MC4R) receptors.',
+    effects: 'Enhances neuroplasticity, executive function, attention and memory consolidation — without central nervous system overstimulation.',
+    totalDoses: 40
+  },
+  selank: {
+    tagline: 'Calm & deep sleep',
+    mechanism: 'Positive allosteric modulator of GABA-A receptors; inhibits endopeptidases/enkephalinases to prevent degradation of endogenous enkephalins.',
+    effects: 'Attenuates anxiety, stabilizes emotional responsiveness and supports deep slow-wave / REM sleep architecture.',
+    totalDoses: 40
+  },
+  kiss: {
+    tagline: 'LH & testosterone',
+    mechanism: 'Full agonist at the GPR54 (KiSS1R) receptor on hypothalamic neurons.',
+    effects: 'Triggers high-amplitude, pulsatile GnRH release, stimulating Luteinizing Hormone (LH) and testosterone production.',
+    totalDoses: 36
+  },
+  epithalon: {
+    tagline: 'Circadian & longevity',
+    mechanism: 'Synthetic pineal tetrapeptide studied for telomerase activation, chromatin structure modification and pineal gland stimulation.',
+    effects: 'Restores endogenous melatonin secretion rhythms, regulates circadian patterns and promotes cellular longevity.',
+    totalDoses: 10
+  },
+  cjc: {
+    tagline: 'Growth hormone pulse',
+    mechanism: 'Dual GHRH-receptor agonist (Mod GRF 1-29) and Growth Hormone Secretagogue Receptor (GHSR-1a) agonist (Ipamorelin).',
+    effects: 'Stimulates pulsatile, synergistic GH release from the anterior pituitary without elevating cortisol or prolactin.',
+    fasting: 'Fast 2 hours before (water only) and 30–45 minutes after (no food or caloric drinks) for an optimal GH pulse.',
+    totalDoses: 80
+  }
+};
+
+// Date-agnostic phase overview — described by relative offset, never fixed calendar dates,
+// so it stays correct whenever you set your start day.
+const PROTOCOL_PHASES = [{
+  n: 1,
+  name: 'Launch & Priming',
+  span: 'Days 1–10',
+  body: 'Reconstitute Epithalon and CJC/Ipamorelin. Epithalon nightly for 10 consecutive days; CJC/Ipamorelin 5-on / 2-off. No morning injections yet.',
+  drugs: ['epithalon', 'cjc']
+}, {
+  n: 2,
+  name: 'Full Nootropic & Endocrine Stack',
+  span: '8 weeks',
+  body: 'Add Semax each morning (Mon–Fri) and Selank each night. CJC/Ipamorelin continues nightly; Kisspeptin-10 on Mon / Wed / Fri nights. Semax and Selank complete at the end of week 8.',
+  drugs: ['semax', 'selank', 'cjc', 'kiss']
+}, {
+  n: 3,
+  name: 'Endocrine & GH Extension',
+  span: '~4 weeks',
+  body: 'Semax and Selank are done. CJC/Ipamorelin nightly (Mon–Fri) plus Kisspeptin-10 on Mon / Wed / Fri. Kisspeptin completes at the end of its 12th week.',
+  drugs: ['cjc', 'kiss']
+}, {
+  n: 4,
+  name: 'Final GH Home Stretch',
+  span: '2 weeks',
+  body: 'CJC-1295 + Ipamorelin only, nightly Mon–Fri, through the end of week 16. Then pause all administration for a mandatory 6–8 week off-cycle.',
+  drugs: ['cjc']
+}];
+
+const GOLDEN_RULES = [
+  ['3 mL mixing syringe', 'Used ONLY to pull BAC water into the dry powder vial. Discard it right after mixing.'],
+  ['U-100 insulin syringe', 'Used ONLY to draw your dose out of the reconstituted vial and inject.'],
+  ['Trickle down the glass', 'Aim water at the inside glass wall so it runs down like rain — never straight onto the powder.'],
+  ['Swirl, never shake', 'Roll the vial gently between your palms until clear. Shaking damages the peptide.'],
+  ['Keep the cold chain', 'Store every reconstituted vial refrigerated at 4–8 °C.'],
+  ['Fresh & rotated', 'New sterile syringe every injection; keep each abdominal site ≥ 1 inch from the last.']
+];
+
+const EQUIPMENT = [
+  ['Insulin syringes (U-100, 1 mL, 31G, 5/16")', '206', '3 boxes of 100'],
+  ['Reconstitution syringes (3 mL Luer-Lok + 21–25G)', '11 sets', '2 packs of 10'],
+  ['70% isopropyl alcohol prep pads', '437', '1 box of 500'],
+  ['Bacteriostatic water (10 mL vials)', '3–4', '4 vials (30-day discard)'],
+  ['Sharps disposal container', '1', '2–4 quart container']
+];
+
+const INVENTORY_TOTALS = '11 vials total — 3 Semax · 2 Selank · 1 Kisspeptin · 1 Epithalon · 4 CJC/Ipamorelin. 22.0 mL BAC water consumed.';
+
+function pepScheduleLabel(p) {
+  const s = p.schedule || {};
+  if (s.type === 'everyday') return p.courseDays ? p.courseDays + ' consecutive days' : 'Daily';
+  if (s.type === 'specific') return (s.days || []).map(d => DOW_FULL[d].slice(0, 1) + DOW_FULL[d].slice(1, 3).toLowerCase()).join(' · ');
+  if (s.type === 'cycle') return s.on + ' on / ' + s.off + ' off (Mon–Fri)';
+  if (s.type === 'prn') return 'As needed';
+  return '';
+}
+function pepDurationLabel(p) {
+  if (p.courseDays) return p.courseDays + ' days';
+  if (p.courseWeeks) return p.courseWeeks + ' weeks';
+  return 'Ongoing';
+}
+function buildReconSteps(p) {
+  const bac = (+p.bacWaterMl).toFixed(1);
+  const draw = Math.round(computeUnits(p.doseMcg, p.vialSizeMg, p.bacWaterMl));
+  return ['Wipe the rubber tops of the BAC water bottle and the ' + p.vialSizeMg + ' mg ' + p.name + ' vial with alcohol prep pads.', 'Pull a 3 mL mixing syringe back to ' + bac + ' mL of air.', 'Push the needle into the BAC water, push the air in, invert the bottle and draw ' + bac + ' mL of BAC water. Withdraw the needle.', 'Insert the needle into the ' + p.name + ' vial and tilt it toward the inside glass wall.', 'Press the plunger slowly so the water trickles down the glass wall — never straight onto the powder.', 'Withdraw and drop the mixing syringe into the Sharps container.', 'Roll the vial gently between your palms until fully clear. Do not shake. Refrigerate.', 'Draw ' + draw + ' U (' + p.doseMcg + ' µg) with a U-100 insulin syringe for each dose.'];
+}
+
+function PeptideCard({
+  p,
+  info,
+  open,
+  onToggle
+}) {
+  const today = logicalNow();
+  const conc = Math.round(p.vialSizeMg * 1000 / p.bacWaterMl);
+  const draw = shownUnits(p, today);
+  const mcg = effectiveBase(p, today);
+  const stat = (label, value) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '1 1 40%',
+      minWidth: 120
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 9.5,
+      letterSpacing: '.1em',
+      color: 'var(--muted)'
+    }
+  }, label), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 13.5,
+      fontWeight: 600,
+      color: 'var(--charcoal)',
+      marginTop: 2
+    }
+  }, value));
+  const section = (label, body, tint, border, color) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: tint,
+      border: '1px solid ' + border,
+      borderRadius: 12,
+      padding: '11px 13px',
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 9.5,
+      letterSpacing: '.1em',
+      color: color,
+      marginBottom: 4
+    }
+  }, label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 13.5,
+      color: 'var(--secondary)',
+      lineHeight: 1.5
+    }
+  }, body));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid var(--hair)',
+      borderRadius: 18,
+      padding: 18,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: onToggle,
+    style: {
+      width: '100%',
+      textAlign: 'left',
+      background: 'none',
+      border: 'none',
+      padding: 0,
+      cursor: 'pointer',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start'
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "serif",
+    style: {
+      fontSize: 24,
+      fontWeight: 600,
+      lineHeight: 1.1
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: 'var(--sage)',
+      marginTop: 3
+    }
+  }, info.tagline)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--muted)',
+      fontSize: 13,
+      transform: open ? 'none' : 'rotate(-90deg)',
+      transition: 'transform .2s',
+      marginTop: 6
+    }
+  }, "▾")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 10,
+      marginTop: 14
+    }
+  }, stat('TARGET DOSE', mcg + ' µg'), stat('SYRINGE DRAW', draw + ' U'), stat('WINDOW', fmt12(p.time)), stat('SCHEDULE', pepScheduleLabel(p))), open && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, section('MECHANISM', info.mechanism, 'var(--sage-tint)', 'var(--sage-border)', 'var(--sage)'), section('PRIMARY EFFECTS', info.effects, '#fff', 'var(--hair)', 'var(--muted)'), info.fasting && section('FASTING WINDOW', info.fasting, 'var(--amber-tint)', 'var(--amber-border)', 'var(--amber)'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 10,
+      marginTop: 12,
+      padding: '12px 13px',
+      background: 'var(--desk)',
+      borderRadius: 12
+    }
+  }, stat('VIAL', p.vialSizeMg + ' mg'), stat('BAC WATER', (+p.bacWaterMl).toFixed(1) + ' mL'), stat('CONCENTRATION', conc.toLocaleString() + ' µg/mL'), stat('DURATION', pepDurationLabel(p) + ' · ' + info.totalDoses + ' doses')), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 9.5,
+      letterSpacing: '.1em',
+      color: 'var(--muted)',
+      margin: '16px 0 8px'
+    }
+  }, "RECONSTITUTION"), buildReconSteps(p).map((t, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      gap: 11,
+      padding: '8px 0',
+      borderTop: i ? '1px solid var(--hair)' : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      color: 'var(--sage)',
+      fontWeight: 600,
+      fontSize: 12,
+      flexShrink: 0
+    }
+  }, i + 1), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 13.5,
+      color: 'var(--secondary)',
+      lineHeight: 1.45
+    }
+  }, t)))));
+}
+
+function PeptidesTab({
+  data
+}) {
+  const [open, setOpen] = useState({});
+  const peps = data.protocols.filter(p => p.kind === 'peptide' && PEPTIDE_REF[p.id]);
+  const order = ['epithalon', 'cjc', 'semax', 'selank', 'kiss'];
+  const sorted = order.map(id => peps.find(p => p.id === id)).filter(Boolean).concat(peps.filter(p => order.indexOf(p.id) < 0));
+  const toggle = id => setOpen(o => ({
+    ...o,
+    [id]: !o[id]
+  }));
+  const eyebrow = {
+    marginTop: 10,
+    marginBottom: 12
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll",
+    style: {
+      padding: '2px 24px 130px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow",
+    style: {
+      marginTop: 10
+    }
+  }, "Reference"), /*#__PURE__*/React.createElement("div", {
+    className: "serif",
+    style: {
+      fontSize: 48,
+      fontWeight: 600,
+      lineHeight: 1,
+      marginBottom: 14
+    }
+  }, "Peptides"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 14,
+      color: 'var(--secondary)',
+      lineHeight: 1.6,
+      margin: '0 0 8px'
+    }
+  }, "Your full protocol in one place — compounds, dosing, reconstitution and the phase timeline. Numbers update live with your plan."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 11.5,
+      fontStyle: 'italic',
+      color: 'var(--muted)',
+      lineHeight: 1.5,
+      margin: '0 0 26px'
+    }
+  }, "For informational purposes only. For medical advice or diagnosis, consult a professional."),
+  /* Phase timeline */
+  /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow",
+    style: eyebrow
+  }, "Protocol Timeline"), PROTOCOL_PHASES.map(ph => /*#__PURE__*/React.createElement("div", {
+    key: ph.n,
+    style: {
+      background: '#fff',
+      border: '1px solid var(--hair)',
+      borderRadius: 16,
+      padding: '15px 17px',
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'baseline',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "serif",
+    style: {
+      fontSize: 19,
+      fontWeight: 600
+    }
+  }, "Phase ", ph.n, " · ", ph.name), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: 'var(--sage)',
+      whiteSpace: 'nowrap'
+    }
+  }, ph.span)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 13.5,
+      color: 'var(--secondary)',
+      lineHeight: 1.55,
+      marginTop: 6
+    }
+  }, ph.body))),
+  /* Compounds */
+  /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow",
+    style: {
+      marginTop: 32,
+      marginBottom: 12
+    }
+  }, "Compounds"), sorted.map(p => /*#__PURE__*/React.createElement(PeptideCard, {
+    key: p.id,
+    p: p,
+    info: PEPTIDE_REF[p.id],
+    open: !!open[p.id],
+    onToggle: () => toggle(p.id)
+  })),
+  /* Golden rules */
+  /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow",
+    style: {
+      marginTop: 32,
+      marginBottom: 12
+    }
+  }, "Reconstitution Golden Rules"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid var(--hair)',
+      borderRadius: 18,
+      padding: 20
+    }
+  }, GOLDEN_RULES.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      padding: '12px 0',
+      borderTop: i ? '1px solid var(--hair)' : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontWeight: 600,
+      fontSize: 15
+    }
+  }, r[0]), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 12,
+      color: 'var(--secondary)',
+      marginTop: 3,
+      lineHeight: 1.5
+    }
+  }, r[1])))),
+  /* Equipment */
+  /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow",
+    style: {
+      marginTop: 32,
+      marginBottom: 12
+    }
+  }, "Equipment & Procurement"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid var(--hair)',
+      borderRadius: 18,
+      padding: 20
+    }
+  }, EQUIPMENT.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      padding: '12px 0',
+      borderTop: i ? '1px solid var(--hair)' : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      gap: 12,
+      alignItems: 'baseline'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontWeight: 600,
+      fontSize: 14,
+      flex: 1
+    }
+  }, r[0]), /*#__PURE__*/React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: 'var(--green)',
+      whiteSpace: 'nowrap'
+    }
+  }, r[1])), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginTop: 3
+    }
+  }, "Buy: ", r[2]))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      padding: '12px 14px',
+      background: 'var(--sage-tint)',
+      border: '1px solid var(--sage-border)',
+      borderRadius: 12,
+      fontFamily: 'var(--body)',
+      fontSize: 12.5,
+      color: 'var(--secondary)',
+      lineHeight: 1.5
+    }
+  }, INVENTORY_TOTALS)));
+}
+
+/* ============================================================
    BOTTOM NAV (Option A — centered KET)
    ============================================================ */
 function AddMenu({
@@ -6560,6 +7091,9 @@ function BottomNav({
   })), item('plans', 'PLANS', /*#__PURE__*/React.createElement(Glyph, {
     on: tab === 'plans',
     d: "plans"
+  })), item('peptides', 'GUIDE', /*#__PURE__*/React.createElement(Glyph, {
+    on: tab === 'peptides',
+    d: "peptides"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
@@ -6657,6 +7191,17 @@ function Glyph({
   }), /*#__PURE__*/React.createElement("path", {
     d: "M12 7v5l3 2"
   }));
+  if (d === 'peptides') return /*#__PURE__*/React.createElement("svg", props, /*#__PURE__*/React.createElement("circle", {
+    cx: "7",
+    cy: "7",
+    r: "2.5"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "17",
+    cy: "17",
+    r: "2.5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M9 9l6 6M17 5.5v3M15.5 7h3"
+  }));
   return null;
 }
 
@@ -6744,6 +7289,8 @@ function App() {
   }), tab === 'plans' && /*#__PURE__*/React.createElement(PlansTab, {
     data: data,
     setData: setData
+  }), tab === 'peptides' && /*#__PURE__*/React.createElement(PeptidesTab, {
+    data: data
   }), tab === 'trends' && /*#__PURE__*/React.createElement(TrendsTab, {
     data: data
   }), tab === 'past' && /*#__PURE__*/React.createElement(PastTab, {
