@@ -14,16 +14,38 @@ function json(data, init = {}) {
   });
 }
 
-function authorized(request, env) {
-  const auth = request.headers.get('Authorization') || '';
-  return auth === `Bearer ${env.APP_SECRET}`;
+// Reads one secret regardless of how it's bound: a Secrets Store binding
+// (an object with a .get() method) or a plain string var/secret.
+async function secretValue(binding) {
+  if (binding == null) return undefined;
+  if (typeof binding === 'string') return binding;
+  if (typeof binding.get === 'function') return await binding.get();
+  return undefined;
 }
 
-async function handlePushSend(env, subEntry, payload) {
+// Loads all secrets once per request so the rest of the code just reads plain values.
+async function loadSecrets(env) {
+  const [APP_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET] = await Promise.all([
+    secretValue(env.APP_SECRET),
+    secretValue(env.VAPID_PUBLIC_KEY),
+    secretValue(env.VAPID_PRIVATE_KEY),
+    secretValue(env.VAPID_SUBJECT),
+    secretValue(env.GOOGLE_CLIENT_ID),
+    secretValue(env.GOOGLE_CLIENT_SECRET)
+  ]);
+  return { APP_SECRET, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET };
+}
+
+function authorized(request, secrets) {
+  const auth = request.headers.get('Authorization') || '';
+  return !!secrets.APP_SECRET && auth === `Bearer ${secrets.APP_SECRET}`;
+}
+
+async function handlePushSend(env, secrets, subEntry, payload) {
   const vapid = {
-    publicKey: env.VAPID_PUBLIC_KEY,
-    privateKey: env.VAPID_PRIVATE_KEY,
-    subject: env.VAPID_SUBJECT || 'mailto:you@example.com'
+    publicKey: secrets.VAPID_PUBLIC_KEY,
+    privateKey: secrets.VAPID_PRIVATE_KEY,
+    subject: secrets.VAPID_SUBJECT || 'mailto:you@example.com'
   };
   const res = await sendWebPush(subEntry.subscription, vapid, payload);
   if (res.status === 404 || res.status === 410) {
@@ -33,7 +55,7 @@ async function handlePushSend(env, subEntry, payload) {
   return res;
 }
 
-async function checkReminders(env) {
+async function checkReminders(env, secrets) {
   const subEntry = await env.SOMA_KV.get('push_sub', 'json');
   if (!subEntry) return;
   const stateRaw = await env.SOMA_KV.get('state');
@@ -54,7 +76,7 @@ async function checkReminders(env) {
     if (nowMinutes < target || nowMinutes >= target + WINDOW) continue;
     const dedupeKey = `notified:${todayKey}:${p.id}`;
     if (await env.SOMA_KV.get(dedupeKey)) continue;
-    await handlePushSend(env, subEntry, {
+    await handlePushSend(env, secrets, subEntry, {
       title: `${p.name} — ${p.amount}`,
       body: p.route ? `${p.route} · due now` : 'Due now',
       tag: dedupeKey,
@@ -70,7 +92,7 @@ async function checkReminders(env) {
     if (session) {
       const dedupeKey = `notified:${todayKey}:ket`;
       if (!(await env.SOMA_KV.get(dedupeKey))) {
-        await handlePushSend(env, subEntry, {
+        await handlePushSend(env, secrets, subEntry, {
           title: 'Ketamine session scheduled today',
           body: session.dose ? `Planned dose: ${session.dose}` : 'Scheduled today',
           tag: dedupeKey,
@@ -82,13 +104,13 @@ async function checkReminders(env) {
   }
 }
 
-async function refreshGoogleAccessToken(env, refreshToken) {
+async function refreshGoogleAccessToken(secrets, refreshToken) {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: env.GOOGLE_CLIENT_ID,
-      client_secret: env.GOOGLE_CLIENT_SECRET,
+      client_id: secrets.GOOGLE_CLIENT_ID,
+      client_secret: secrets.GOOGLE_CLIENT_SECRET,
       refresh_token: refreshToken,
       grant_type: 'refresh_token'
     })
@@ -98,13 +120,13 @@ async function refreshGoogleAccessToken(env, refreshToken) {
   return body.access_token;
 }
 
-async function runBackup(env) {
+async function runBackup(env, secrets) {
   const tokens = await env.SOMA_KV.get('google_tokens', 'json');
   if (!tokens || !tokens.refresh_token) return { skipped: 'not connected' };
   const stateRaw = await env.SOMA_KV.get('state');
   if (!stateRaw) return { skipped: 'no state to back up' };
 
-  const accessToken = await refreshGoogleAccessToken(env, tokens.refresh_token);
+  const accessToken = await refreshGoogleAccessToken(secrets, tokens.refresh_token);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `soma-backup-${stamp}.json`;
 
@@ -141,15 +163,19 @@ function googleRedirectUri(requestUrl) {
 
 async function handleFetch(request, env) {
   const url = new URL(request.url);
+  const secrets = await loadSecrets(env);
 
   if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   if (url.pathname === '/auth/google/start') {
-    if (url.searchParams.get('key') !== env.APP_SECRET) return new Response('Forbidden', { status: 403 });
+    if (!secrets.APP_SECRET || url.searchParams.get('key') !== secrets.APP_SECRET) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    if (!secrets.GOOGLE_CLIENT_ID) return new Response('GOOGLE_CLIENT_ID is not configured yet.', { status: 500 });
     const state = crypto.randomUUID();
     await env.SOMA_KV.put(`oauth_state:${state}`, '1', { expirationTtl: 300 });
     const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-    authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+    authUrl.searchParams.set('client_id', secrets.GOOGLE_CLIENT_ID);
     authUrl.searchParams.set('redirect_uri', googleRedirectUri(request.url));
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/drive.file');
@@ -170,8 +196,8 @@ async function handleFetch(request, env) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code,
-        client_id: env.GOOGLE_CLIENT_ID,
-        client_secret: env.GOOGLE_CLIENT_SECRET,
+        client_id: secrets.GOOGLE_CLIENT_ID,
+        client_secret: secrets.GOOGLE_CLIENT_SECRET,
         redirect_uri: googleRedirectUri(request.url),
         grant_type: 'authorization_code'
       })
@@ -194,14 +220,15 @@ async function handleFetch(request, env) {
   if (url.pathname === '/api/debug') {
     const provided = url.searchParams.get('key') || '';
     return json({
-      secretConfigured: typeof env.APP_SECRET === 'string' && env.APP_SECRET.length > 0,
-      match: provided === env.APP_SECRET,
-      authHeaderReceived: request.headers.get('Authorization') || null
+      secretConfigured: typeof secrets.APP_SECRET === 'string' && secrets.APP_SECRET.length > 0,
+      match: !!secrets.APP_SECRET && provided === secrets.APP_SECRET,
+      authHeaderReceived: request.headers.get('Authorization') || null,
+      bindingKind: env.APP_SECRET == null ? 'missing' : typeof env.APP_SECRET === 'string' ? 'plain-var' : 'secrets-store'
     });
   }
 
   if (!url.pathname.startsWith('/api/')) return new Response('Not found', { status: 404 });
-  if (!authorized(request, env)) return json({ error: 'unauthorized' }, { status: 401 });
+  if (!authorized(request, secrets)) return json({ error: 'unauthorized' }, { status: 401 });
 
   if (url.pathname === '/api/state' && request.method === 'GET') {
     const stateRaw = await env.SOMA_KV.get('state');
@@ -229,7 +256,7 @@ async function handleFetch(request, env) {
   if (url.pathname === '/api/push/test' && request.method === 'POST') {
     const subEntry = await env.SOMA_KV.get('push_sub', 'json');
     if (!subEntry) return json({ error: 'no subscription on file' }, { status: 400 });
-    const res = await handlePushSend(env, subEntry, {
+    const res = await handlePushSend(env, secrets, subEntry, {
       title: 'Soma test reminder',
       body: 'Push notifications are working.',
       tag: 'test',
@@ -246,7 +273,7 @@ async function handleFetch(request, env) {
 
   if (url.pathname === '/api/backup/run' && request.method === 'POST') {
     try {
-      const result = await runBackup(env);
+      const result = await runBackup(env, secrets);
       return json({ ok: true, result });
     } catch (err) {
       return json({ ok: false, error: String(err) }, { status: 500 });
@@ -263,10 +290,11 @@ export default {
   async scheduled(event, env, ctx) {
     // wrangler.toml defines two cron triggers: the 5-minute one drives dose
     // reminders, the daily one drives the Google Drive backup.
+    const secrets = await loadSecrets(env);
     if (event.cron === '*/5 * * * *') {
-      ctx.waitUntil(checkReminders(env));
+      ctx.waitUntil(checkReminders(env, secrets));
     } else {
-      ctx.waitUntil(runBackup(env));
+      ctx.waitUntil(runBackup(env, secrets));
     }
   }
 };
