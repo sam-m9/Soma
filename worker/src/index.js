@@ -189,6 +189,17 @@ async function handleFetch(request, env) {
     });
   }
 
+  // Temporary diagnostic — remove once auth is confirmed working.
+  // Visit /api/debug?key=whatever in a browser to check if it matches the deployed secret.
+  if (url.pathname === '/api/debug') {
+    const provided = url.searchParams.get('key') || '';
+    return json({
+      secretConfigured: typeof env.APP_SECRET === 'string' && env.APP_SECRET.length > 0,
+      match: provided === env.APP_SECRET,
+      authHeaderReceived: request.headers.get('Authorization') || null
+    });
+  }
+
   if (!url.pathname.startsWith('/api/')) return new Response('Not found', { status: 404 });
   if (!authorized(request, env)) return json({ error: 'unauthorized' }, { status: 401 });
 
