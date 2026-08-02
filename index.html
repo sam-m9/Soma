@@ -716,7 +716,7 @@ function seed() {
       anchor: '',
       days: [1, 2, 3, 4, 5]
     },
-    startDate: '',
+    startDate: '2026-08-17',
     endDate: '',
     courseWeeks: 8,
     phases: [],
@@ -746,7 +746,7 @@ function seed() {
       anchor: '',
       days: [1, 2, 3, 4, 5]
     },
-    startDate: '',
+    startDate: '2026-08-17',
     endDate: '',
     courseWeeks: 8,
     phases: [],
@@ -775,7 +775,7 @@ function seed() {
       anchor: '',
       days: [1, 3, 5]
     },
-    startDate: '',
+    startDate: '2026-08-17',
     endDate: '',
     courseWeeks: 12,
     phases: [],
@@ -805,7 +805,7 @@ function seed() {
       anchor: '',
       days: []
     },
-    startDate: '',
+    startDate: '2026-08-04',
     endDate: '',
     courseWeeks: 0,
     courseDays: 10,
@@ -840,7 +840,7 @@ function seed() {
       anchor: '',
       days: [1, 2, 3, 4, 5]
     },
-    startDate: '',
+    startDate: '2026-08-04',
     endDate: '',
     courseWeeks: 16,
     phases: [],
@@ -877,7 +877,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 7; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 8; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
@@ -892,7 +892,8 @@ function migrate(d) {
     d.protocols.forEach(p => {
       const c = canon[p.id];
       if (!c) return;
-      const keepStart = p.startDate || '';
+      // Keep a start date you've set; otherwise adopt the planned date from the spec (backfill only).
+      const keepStart = p.startDate || c.startDate || '';
       const keepPauses = Array.isArray(p.pauses) ? p.pauses : [];
       const keepStatus = p.status || 'active';
       const fresh = JSON.parse(JSON.stringify(c)); // canonical dosage + details
