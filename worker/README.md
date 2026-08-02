@@ -124,3 +124,10 @@ time, and Drive backups run once a day, with no further action needed.
   reconstitution.
 - Drive backups use the `drive.file` scope, so the Worker can only see files
   it created — it never has broader access to your Drive.
+- **Backup rotation:** all backups live in a **"SOMA backup"** folder in your
+  Drive, in exactly two files (`SOMA backup A — <date>.json` and `...B...`).
+  Each day's backup overwrites whichever file belongs to the current week;
+  crossing into a new week flips to the *other* file, leaving the just-
+  finished week's snapshot untouched. So at any time you have this week's
+  latest state and last week's final state — never more than two files, never
+  fewer than one full week of history.

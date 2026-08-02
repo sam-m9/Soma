@@ -148,6 +148,95 @@ async function refreshGoogleAccessToken(secrets, refreshToken) {
   return body.access_token;
 }
 
+const BACKUP_FOLDER_NAME = 'SOMA backup';
+
+// Monday-of-the-week key in the given timezone, used purely to detect "a new
+// week has started" for rotating the backup slot — independent of dosing.
+function mondayKeyForTZ(tz) {
+  const p = localParts(tz);
+  const d = new Date(Date.UTC(p.y, p.mo - 1, p.d));
+  const wd = (d.getUTCDay() + 6) % 7; // Mon=0 ... Sun=6
+  d.setUTCDate(d.getUTCDate() - wd);
+  return keyOf(d);
+}
+
+async function driveFolderId(env, accessToken) {
+  const cached = await env.SOMA_KV.get('backup_folder_id');
+  if (cached) return cached;
+  const q = encodeURIComponent(`mimeType='application/vnd.google-apps.folder' and name='${BACKUP_FOLDER_NAME}' and trashed=false`);
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) throw new Error(`Drive folder lookup failed: ${res.status} ${await res.text()}`);
+  const body = await res.json();
+  let id = body.files && body.files[0] && body.files[0].id;
+  if (!id) {
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: BACKUP_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
+    });
+    if (!createRes.ok) throw new Error(`Drive folder create failed: ${createRes.status} ${await createRes.text()}`);
+    id = (await createRes.json()).id;
+  }
+  await env.SOMA_KV.put('backup_folder_id', id);
+  return id;
+}
+
+async function driveMultipart(url, method, accessToken, metadata, contentJson) {
+  const boundary = 'soma-backup-boundary';
+  const body =
+    `--${boundary}\r\n` +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    `${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\n` +
+    'Content-Type: application/json\r\n\r\n' +
+    `${contentJson}\r\n` +
+    `--${boundary}--`;
+  return fetch(url, {
+    method,
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+}
+
+// Creates the file the first time, then renames + overwrites its content in
+// place on every later call (same file ID, so it never clutters the folder
+// with new copies — the title's date just reflects the latest write).
+async function driveUpsertFile(env, accessToken, folderId, slot, title, contentJson) {
+  const kvKey = `backup_file_${slot}`;
+  let fileId = await env.SOMA_KV.get(kvKey);
+
+  if (!fileId) {
+    // One-time recovery if the KV cache was lost: find it by its stable slot prefix.
+    const q = encodeURIComponent(`name contains 'SOMA backup ${slot}' and '${folderId}' in parents and trashed=false`);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (res.ok) {
+      const body = await res.json();
+      fileId = body.files && body.files[0] && body.files[0].id;
+    }
+  }
+
+  const metadata = fileId ? { name: title } : { name: title, mimeType: 'application/json', parents: [folderId] };
+  if (fileId) {
+    const res = await driveMultipart(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, 'PATCH', accessToken, metadata, contentJson);
+    if (res.ok) {
+      await env.SOMA_KV.put(kvKey, fileId);
+      return fileId;
+    }
+    if (res.status !== 404) throw new Error(`Drive update failed: ${res.status} ${await res.text()}`);
+    // file was deleted out from under us — fall through and recreate it
+  }
+
+  const res = await driveMultipart('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', 'POST', accessToken, metadata, contentJson);
+  if (!res.ok) throw new Error(`Drive create failed: ${res.status} ${await res.text()}`);
+  const file = await res.json();
+  await env.SOMA_KV.put(kvKey, file.id);
+  return file.id;
+}
+
 async function runBackup(env, secrets) {
   const tokens = await env.SOMA_KV.get('google_tokens', 'json');
   if (!tokens || !tokens.refresh_token) return { skipped: 'not connected' };
@@ -155,32 +244,28 @@ async function runBackup(env, secrets) {
   if (!stateRaw) return { skipped: 'no state to back up' };
 
   const accessToken = await refreshGoogleAccessToken(secrets, tokens.refresh_token);
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `soma-backup-${stamp}.json`;
+  const folderId = await driveFolderId(env, accessToken);
 
-  const boundary = 'soma-backup-boundary';
-  const metadata = { name: filename, mimeType: 'application/json' };
-  const body =
-    `--${boundary}\r\n` +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-    `${JSON.stringify(metadata)}\r\n` +
-    `--${boundary}\r\n` +
-    'Content-Type: application/json\r\n\r\n' +
-    `${stateRaw}\r\n` +
-    `--${boundary}--`;
+  const subEntry = await env.SOMA_KV.get('push_sub', 'json');
+  const tz = (subEntry && subEntry.timezone) || 'UTC';
+  const weekKey = mondayKeyForTZ(tz);
+  const todayKey = keyOf(logicalNowInTZ(tz));
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': `multipart/related; boundary=${boundary}`
-    },
-    body
-  });
-  if (!res.ok) throw new Error(`Drive upload failed: ${res.status} ${await res.text()}`);
-  const file = await res.json();
+  // Two rotating slots: the current week's slot gets overwritten daily (fresh),
+  // while the other slot sits untouched holding last week's final snapshot —
+  // until it becomes "two weeks ago" and rotates back into use.
+  let slot = (await env.SOMA_KV.get('backup_slot')) || 'A';
+  const lastWeek = await env.SOMA_KV.get('backup_week_key');
+  if (lastWeek !== weekKey) {
+    slot = slot === 'A' ? 'B' : 'A';
+    await env.SOMA_KV.put('backup_slot', slot);
+    await env.SOMA_KV.put('backup_week_key', weekKey);
+  }
 
-  const lastBackup = { at: new Date().toISOString(), fileId: file.id, fileName: filename };
+  const title = `SOMA backup ${slot} — ${todayKey}.json`;
+  const fileId = await driveUpsertFile(env, accessToken, folderId, slot, title, stateRaw);
+
+  const lastBackup = { at: new Date().toISOString(), fileId, fileName: title, slot, weekKey };
   await env.SOMA_KV.put('last_backup', JSON.stringify(lastBackup));
   return lastBackup;
 }
@@ -240,18 +325,6 @@ async function handleFetch(request, env) {
     await env.SOMA_KV.put('google_tokens', JSON.stringify({ refresh_token }));
     return new Response('<h1>Google Drive connected</h1><p>You can close this tab.</p>', {
       headers: { 'Content-Type': 'text/html' }
-    });
-  }
-
-  // Temporary diagnostic — remove once auth is confirmed working.
-  // Visit /api/debug?key=whatever in a browser to check if it matches the deployed secret.
-  if (url.pathname === '/api/debug') {
-    const provided = url.searchParams.get('key') || '';
-    return json({
-      secretConfigured: typeof secrets.APP_SECRET === 'string' && secrets.APP_SECRET.length > 0,
-      match: !!secrets.APP_SECRET && provided === secrets.APP_SECRET,
-      authHeaderReceived: request.headers.get('Authorization') || null,
-      bindingKind: env.APP_SECRET == null ? 'missing' : typeof env.APP_SECRET === 'string' ? 'plain-var' : 'secrets-store'
     });
   }
 
