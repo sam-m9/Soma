@@ -68,38 +68,66 @@ async function checkReminders(env, secrets) {
   const nowMinutes = now.h * 60 + now.mi;
   const WINDOW = 5; // matches the cron cadence below
 
+  // Fires a single push per (day, protocol, kind) slot, deduped in KV so a
+  // 5-minute cron never double-notifies within one target window.
+  const fireOnce = async (slotKey, payload) => {
+    const dedupeKey = `notified:${todayKey}:${slotKey}`;
+    if (await env.SOMA_KV.get(dedupeKey)) return;
+    await handlePushSend(env, secrets, subEntry, { ...payload, tag: dedupeKey });
+    await env.SOMA_KV.put(dedupeKey, '1', { expirationTtl: 90000 });
+  };
+  const inWindow = target => nowMinutes >= target && nowMinutes < target + WINDOW;
+
   const due = dueProtocolsToday(state.protocols, today, today);
   for (const p of due) {
     if (!p.time) continue;
     const [hh, mm] = p.time.split(':').map(Number);
     const target = hh * 60 + mm;
-    if (nowMinutes < target || nowMinutes >= target + WINDOW) continue;
-    const dedupeKey = `notified:${todayKey}:${p.id}`;
-    if (await env.SOMA_KV.get(dedupeKey)) continue;
-    await handlePushSend(env, secrets, subEntry, {
-      title: `${p.name} — ${p.amount}`,
-      body: p.route ? `${p.route} · due now` : 'Due now',
-      tag: dedupeKey,
-      url: '/'
-    });
-    await env.SOMA_KV.put(dedupeKey, '1', { expirationTtl: 90000 });
+
+    // Pre-injection fast: ping when the fasting window opens (e.g. 2 hr before CJC).
+    if (p.fast && p.fast.beforeMin) {
+      const preTarget = target - Number(p.fast.beforeMin);
+      if (preTarget >= 0 && inWindow(preTarget)) {
+        await fireOnce(`${p.id}:prefast`, {
+          title: `${p.name} — begin fast`,
+          body: 'Start your pre-injection fast now. Water only.',
+          url: '/'
+        });
+      }
+    }
+
+    // The dose itself.
+    if (inWindow(target)) {
+      await fireOnce(p.id, {
+        title: `${p.name} — ${p.amount}`,
+        body: p.route ? `${p.route} · due now` : 'Due now',
+        url: '/'
+      });
+    }
+
+    // Post-injection fast: ping when it's safe to eat again (e.g. 30–45 min after CJC).
+    if (p.fast && p.fast.afterMin) {
+      const postTarget = target + Number(p.fast.afterMin);
+      if (postTarget < 1440 && inWindow(postTarget)) {
+        await fireOnce(`${p.id}:postfast`, {
+          title: `${p.name} — fast complete`,
+          body: 'Post-injection fast window is over. You can eat now.',
+          url: '/'
+        });
+      }
+    }
   }
 
   // Ketamine sessions have no per-entry time; check once at a fixed 08:00 slot.
   const KET_TIME = 8 * 60;
-  if (nowMinutes >= KET_TIME && nowMinutes < KET_TIME + WINDOW) {
+  if (inWindow(KET_TIME)) {
     const session = (state.ketSessions || []).find(s => s.date === todayKey && !s.done);
     if (session) {
-      const dedupeKey = `notified:${todayKey}:ket`;
-      if (!(await env.SOMA_KV.get(dedupeKey))) {
-        await handlePushSend(env, secrets, subEntry, {
-          title: 'Ketamine session scheduled today',
-          body: session.dose ? `Planned dose: ${session.dose}` : 'Scheduled today',
-          tag: dedupeKey,
-          url: '/'
-        });
-        await env.SOMA_KV.put(dedupeKey, '1', { expirationTtl: 90000 });
-      }
+      await fireOnce('ket', {
+        title: 'Ketamine session scheduled today',
+        body: session.dose ? `Planned dose: ${session.dose}` : 'Scheduled today',
+        url: '/'
+      });
     }
   }
 }

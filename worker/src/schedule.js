@@ -79,6 +79,7 @@ function weeksSince(startKey, date) {
 
 function courseEndKey(p) {
   if (p.endDate) return p.endDate;
+  if (p.startDate && p.courseDays) return keyOf(addDays(dateFromKey(p.startDate), Number(p.courseDays) - 1));
   if (p.startDate && p.courseWeeks) return keyOf(addDays(dateFromKey(p.startDate), Number(p.courseWeeks) * 7 - 1));
   return '';
 }
@@ -131,6 +132,6 @@ export function dueProtocolsToday(protocols, todayDate, nowFallback) {
     .filter(p => p.status === 'active' && runsOn(p, todayDate, nowFallback) === 'on')
     .map(p => {
       const amount = p.unit === 'U' ? shownUnits(p, todayDate) + ' units' : effectiveBase(p, todayDate) + ' ' + p.unit;
-      return { id: p.id, name: p.name, time: p.time, amount, route: p.route || '' };
+      return { id: p.id, name: p.name, time: p.time, amount, route: p.route || '', fast: p.fast || null };
     });
 }
