@@ -819,7 +819,7 @@ function seed() {
     kind: 'peptide',
     name: 'CJC-1295 + Ipamorelin',
     group: 'Night',
-    time: '21:30',
+    time: '22:45',
     route: 'SubQ',
     unit: 'U',
     doseMcg: 200,
@@ -877,7 +877,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 8; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 9; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
