@@ -722,7 +722,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 30,
+    lifespanDays: 31,
     status: 'active'
   }, {
     id: 'selank',
@@ -752,7 +752,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 30,
+    lifespanDays: 31,
     status: 'active'
   }, {
     id: 'kiss',
@@ -781,7 +781,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 30,
+    lifespanDays: 31,
     status: 'active'
   }, {
     id: 'epithalon',
@@ -812,7 +812,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 30,
+    lifespanDays: 31,
     status: 'active'
   }, {
     id: 'cjc',
@@ -846,7 +846,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 30,
+    lifespanDays: 31,
     status: 'active'
   }];
   return {
@@ -854,6 +854,7 @@ function seed() {
     protocols,
     ketSessions: [],
     vials: [],
+    bacBottles: [],
     logs: {},
     whoopUrl: '',
     ketArchived: false,
@@ -877,7 +878,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 10; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 11; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
@@ -917,6 +918,7 @@ function migrate(d) {
     if (p.note === 'Food fine · Take second.' || p.note === 'Food fine.' || p.note === 'Food fine') p.note = 'Food is fine.';
     if (typeof p.note === 'string' && p.note.indexOf('Take ~1 hr') === 0) p.note = 'Take about 1 hour before sleep to support deep REM. Food is fine.';
   });
+  if (!Array.isArray(d.bacBottles)) d.bacBottles = []; // BAC water bottle tracker (added later)
   return d;
 }
 function loadData() {
@@ -1277,11 +1279,65 @@ function MonthCalendar({
     }
   }, "Tap any day to jump the list to it. Use the arrows to look months ahead."));
 }
+/* In-app pre-flight banner: a compound starts within 3 days but no still-valid
+   reconstituted vial exists for it yet. Nudges the user to reconstitute in time. */
+function PreflightBanner({
+  data,
+  setTab
+}) {
+  const today = logicalNow();
+  const pending = (data.protocols || []).filter(p => {
+    if (p.kind !== 'peptide' || p.status !== 'active' || !p.startDate) return false;
+    const daysUntil = Math.round((dateFromKey(p.startDate) - today) / 86400000);
+    if (daysUntil < 0 || daysUntil > 3) return false;
+    const hasValidVial = (data.vials || []).some(v => {
+      if (v.protocolId !== p.id || !v.reconDate) return false;
+      return addDays(dateFromKey(v.reconDate), Number(v.lifespanDays || 31)) >= dateFromKey(p.startDate);
+    });
+    return !hasValidVial;
+  });
+  if (!pending.length) return null;
+  const label = p => {
+    const d = Math.round((dateFromKey(p.startDate) - today) / 86400000);
+    return p.name + (d === 0 ? ' (today)' : d === 1 ? ' (tomorrow)' : ' (in ' + d + 'd)');
+  };
+  return /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: () => setTab && setTab('plans'),
+    style: {
+      display: 'block',
+      width: '100%',
+      textAlign: 'left',
+      background: 'var(--amber-tint)',
+      border: '1px solid var(--amber-border)',
+      borderRadius: 14,
+      padding: '12px 14px',
+      margin: '0 0 14px',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10,
+      letterSpacing: '.1em',
+      color: 'var(--amber)',
+      marginBottom: 3
+    }
+  }, "RECONSTITUTE SOON"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 13.5,
+      color: 'var(--charcoal)',
+      lineHeight: 1.45
+    }
+  }, pending.map(label).join(', '), " — no vial ready yet. Tap to reconstitute in Plans."));
+}
 function ListTab({
   data,
   setData,
   selKey,
-  setSelKey
+  setSelKey,
+  setTab
 }) {
   const today = logicalNow();
   const isToday = selKey === keyOf(today);
@@ -1453,7 +1509,10 @@ function ListTab({
     style: {
       padding: '2px 24px 130px'
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(PreflightBanner, {
+    data: data,
+    setTab: setTab
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       justifyContent: 'space-between',
@@ -3288,6 +3347,9 @@ function PlansTab({
   }, "Reconstitute")), /*#__PURE__*/React.createElement(Shelf, {
     data: data,
     setData: setData
+  }), /*#__PURE__*/React.createElement(BacWater, {
+    data: data,
+    setData: setData
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       height: 30
@@ -4243,6 +4305,136 @@ function Shelf({
   }));
 }
 
+/* ---- BAC water bottle tracker: 30-day discard window from first puncture ---- */
+const BAC_BOTTLE_DAYS = 30;
+function BacWater({
+  data,
+  setData
+}) {
+  const today = logicalNow();
+  const bottles = data.bacBottles || [];
+  const open = () => setData(d => {
+    const n = JSON.parse(JSON.stringify(d));
+    if (!Array.isArray(n.bacBottles)) n.bacBottles = [];
+    n.bacBottles.push({
+      id: uid('bac'),
+      openDate: keyOf(logicalNow()),
+      lifespanDays: BAC_BOTTLE_DAYS
+    });
+    return n;
+  });
+  const discard = id => setData(d => {
+    const n = JSON.parse(JSON.stringify(d));
+    n.bacBottles = (n.bacBottles || []).filter(b => b.id !== id);
+    return n;
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "serif",
+    style: {
+      fontSize: 22,
+      fontWeight: 600
+    }
+  }, "BAC Water"), /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: open,
+    style: {
+      ...miniBtn,
+      color: 'var(--green)',
+      borderColor: 'var(--sage-border)'
+    }
+  }, "+ Open bottle")), !bottles.length && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 13,
+      color: 'var(--muted)',
+      padding: '2px 2px'
+    }
+  }, "No open bottle. Log one when you first puncture a BAC water vial — it tracks the 30-day discard window."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, bottles.map(b => {
+    const exp = addDays(dateFromKey(b.openDate), Number(b.lifespanDays || BAC_BOTTLE_DAYS));
+    const daysLeft = Math.ceil((exp - today) / 86400000);
+    const expired = daysLeft < 0;
+    const warn = daysLeft <= 5;
+    return /*#__PURE__*/React.createElement("div", {
+      key: b.id,
+      style: {
+        width: 'calc(50% - 6px)',
+        background: expired ? 'var(--amber-tint)' : '#fff',
+        border: '1px solid ' + (warn ? 'var(--amber-border)' : 'var(--hair)'),
+        borderRadius: 16,
+        padding: 16,
+        position: 'relative'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        if (confirm('Discard this BAC water bottle from tracking?')) discard(b.id);
+      },
+      "aria-label": "Discard bottle",
+      style: {
+        position: 'absolute',
+        top: 8,
+        right: 10,
+        background: 'none',
+        border: 'none',
+        color: 'var(--muted)',
+        fontSize: 16,
+        cursor: 'pointer'
+      }
+    }, "×"), /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: {
+        fontSize: 14,
+        fontWeight: 600
+      }
+    }, "BAC water"), /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: {
+        fontSize: 11.5,
+        color: expired || warn ? 'var(--amber)' : 'var(--secondary)',
+        marginTop: 3
+      }
+    }, expired ? 'Expired ' + Math.abs(daysLeft) + 'd ago' : daysLeft + ' days left'), /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 3
+      }
+    }, "Opened ", b.openDate, " · discard ", keyOf(exp)));
+  })));
+}
+
+/* Injections per week for a protocol — used to default a vial's reorder alert
+   to roughly one week of remaining draws instead of an arbitrary number. */
+function drawsPerWeek(p) {
+  const s = (p && p.schedule) || {};
+  if (s.type === 'everyday') return 7;
+  if (s.type === 'specific') return (s.days || []).length || 7;
+  if (s.type === 'cycle') {
+    const on = Number(s.on) || 0;
+    const off = Number(s.off) || 0;
+    if (s.cycleUnit === 'weeks') return 7;
+    const per = on + off;
+    return per > 0 ? Math.max(1, Math.round((on / per) * 7)) : 7;
+  }
+  return 5;
+}
 /* ---- Reconstitution wizard ---- */
 function ReconWizard({
   data,
@@ -4252,8 +4444,8 @@ function ReconWizard({
   const peptides = data.protocols.filter(p => p.kind === 'peptide');
   const [step, setStep] = useState(1);
   const [name, setName] = useState(peptides[0] ? peptides[0].name : '');
-  const [lifespan, setLifespan] = useState(peptides[0] ? peptides[0].lifespanDays : 30);
-  const [reorderAt, setReorderAt] = useState(5);
+  const [lifespan, setLifespan] = useState(peptides[0] ? peptides[0].lifespanDays : 31);
+  const [reorderAt, setReorderAt] = useState(peptides[0] ? drawsPerWeek(peptides[0]) : 5);
   const [reconDate, setReconDate] = useState(keyOf(logicalNow()));
   const sel = peptides.find(x => x.name === name);
   const finish = () => {
@@ -4307,7 +4499,10 @@ function ReconWizard({
     onChange: e => {
       setName(e.target.value);
       const p = peptides.find(x => x.name === e.target.value);
-      if (p) setLifespan(p.lifespanDays);
+      if (p) {
+        setLifespan(p.lifespanDays);
+        setReorderAt(drawsPerWeek(p));
+      }
     },
     style: {
       marginBottom: 16
@@ -4370,7 +4565,7 @@ function ReconWizard({
       marginTop: 6,
       lineHeight: 1.5
     }
-  }, "Flags the vial to reorder once the estimated draws left reach this number. Set 0 to skip.")), step === 2 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "Flags the vial to reorder once the estimated draws left reach this number. Pre-set to about one week of doses for this protocol — adjust or set 0 to skip.")), step === 2 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "serif",
     style: {
       fontSize: 24,
@@ -4489,7 +4684,7 @@ function ProtocolBuilder({
     cycleUnit: initial.schedule.cycleUnit || 'days',
     days: initial.schedule.days || [],
     skipWeekends: !!initial.skipWeekends,
-    lifespanDays: initial.lifespanDays || 30,
+    lifespanDays: initial.lifespanDays || 31,
     startDate: initial.startDate || '',
     endDate: initial.endDate || '',
     courseWeeks: initial.courseWeeks || ''
@@ -4512,7 +4707,7 @@ function ProtocolBuilder({
     cycleUnit: 'days',
     days: [],
     skipWeekends: false,
-    lifespanDays: 30,
+    lifespanDays: 31,
     startDate: '',
     endDate: '',
     courseWeeks: ''
@@ -7378,7 +7573,8 @@ function App() {
     data: data,
     setData: setData,
     selKey: selKey,
-    setSelKey: setSelKey
+    setSelKey: setSelKey,
+    setTab: setTab
   }), tab === 'plans' && /*#__PURE__*/React.createElement(PlansTab, {
     data: data,
     setData: setData

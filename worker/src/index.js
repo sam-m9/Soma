@@ -154,7 +154,7 @@ async function checkReminders(env, secrets) {
     // (#6) Vial expiry / reorder — mirrors the app's Shelf math.
     for (const v of state.vials || []) {
       if (!v.reconDate) continue;
-      const exp = addDays(dateFromKey(v.reconDate), Number(v.lifespanDays || 30));
+      const exp = addDays(dateFromKey(v.reconDate), Number(v.lifespanDays || 31));
       const daysLeft = Math.ceil((exp - today) / 86400000);
       let drawsLeft = null;
       const p = (state.protocols || []).find(x => x.id === v.protocolId);
@@ -177,6 +177,20 @@ async function checkReminders(env, secrets) {
         await fireOnce(`vial:${v.id}`, {
           title: `${v.name} vial — ${daysLeft < 0 ? 'expired' : 'running low'}`,
           body: parts.join(' · ') + '. Reconstitute a fresh vial soon.',
+          url: '/'
+        });
+      }
+    }
+
+    // BAC water bottle: 30-day discard window from first puncture.
+    for (const b of state.bacBottles || []) {
+      if (!b.openDate) continue;
+      const exp = addDays(dateFromKey(b.openDate), Number(b.lifespanDays || 30));
+      const daysLeft = Math.ceil((exp - today) / 86400000);
+      if (daysLeft < 0 || daysLeft <= 3) {
+        await fireOnce(`bac:${b.id}`, {
+          title: `BAC water — ${daysLeft < 0 ? 'expired' : 'discard soon'}`,
+          body: (daysLeft < 0 ? `Opened bottle expired ${Math.abs(daysLeft)}d ago` : `${daysLeft}d left on the open bottle`) + '. Open a fresh one.',
           url: '/'
         });
       }
