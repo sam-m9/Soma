@@ -722,7 +722,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 31,
+    lifespanDays: 30,
     status: 'active'
   }, {
     id: 'selank',
@@ -752,7 +752,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 31,
+    lifespanDays: 30,
     status: 'active'
   }, {
     id: 'kiss',
@@ -781,7 +781,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 31,
+    lifespanDays: 30,
     status: 'active'
   }, {
     id: 'epithalon',
@@ -812,7 +812,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 31,
+    lifespanDays: 30,
     status: 'active'
   }, {
     id: 'cjc',
@@ -846,7 +846,7 @@ function seed() {
     phases: [],
     titrations: [],
     pauses: [],
-    lifespanDays: 31,
+    lifespanDays: 30,
     status: 'active'
   }];
   return {
@@ -877,7 +877,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 9; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 10; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
@@ -1981,7 +1981,9 @@ function RoutineMeds({
           letterSpacing: '.02em'
         }
       }, m.initials), edit && /*#__PURE__*/React.createElement("button", {
-        onClick: () => del(m.id),
+        onClick: () => {
+          if (confirm('Remove ' + m.name + ' from your routine?')) del(m.id);
+        },
         style: {
           position: 'absolute',
           top: -4,
@@ -3122,6 +3124,65 @@ function KetSheet({
 /* ============================================================
    PLANS TAB
    ============================================================ */
+/* Collapsible section: keeps low-frequency settings (WHOOP, backup, safety,
+   archive) tucked away so the daily-use content stays uncluttered. */
+function Collapsible({
+  title,
+  subtitle,
+  defaultOpen,
+  children
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: '1px solid var(--hair)',
+      borderRadius: 16,
+      background: '#fff',
+      marginBottom: 12,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: () => setOpen(o => !o),
+    style: {
+      width: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      background: 'none',
+      border: 'none',
+      padding: '15px 17px',
+      cursor: 'pointer',
+      textAlign: 'left'
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "serif",
+    style: {
+      fontSize: 20,
+      fontWeight: 600
+    }
+  }, title), subtitle && /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginTop: 2
+    }
+  }, subtitle)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--muted)',
+      fontSize: 13,
+      transform: open ? 'none' : 'rotate(-90deg)',
+      transition: 'transform .2s',
+      flexShrink: 0
+    }
+  }, "▾")), open && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '0 17px 17px'
+    }
+  }, children));
+}
 function PlansTab({
   data,
   setData
@@ -3229,7 +3290,15 @@ function PlansTab({
     setData: setData
   }), /*#__PURE__*/React.createElement("div", {
     style: {
-      marginTop: 30,
+      height: 30
+    }
+  }), /*#__PURE__*/React.createElement(Collapsible, {
+    title: "Settings & More",
+    subtitle: "WHOOP sync · Backup · Safety · Archive",
+    defaultOpen: false
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4,
       background: 'var(--charcoal)',
       borderRadius: 18,
       padding: 22
@@ -3473,7 +3542,7 @@ function PlansTab({
     del: del,
     archived: true,
     onEdit: () => setBuilder(p)
-  })), builder && /*#__PURE__*/React.createElement(ProtocolBuilder, {
+  }))), builder && /*#__PURE__*/React.createElement(ProtocolBuilder, {
     initial: builder === 'new' ? null : builder,
     onClose: () => setBuilder(null),
     setData: setData
@@ -3776,7 +3845,9 @@ function ProtocolCard({
       marginTop: 14,
       flexWrap: 'wrap'
     }
-  }, /*#__PURE__*/React.createElement("button", {
+  },
+  /* Primary action stays visible; everything else lives behind the ⋯ menu to keep the card calm. */
+  !archived && /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: onEdit,
     style: {
@@ -3784,27 +3855,41 @@ function ProtocolCard({
       color: 'var(--green)',
       borderColor: 'var(--sage-border)'
     }
-  }, "Edit"), !archived && /*#__PURE__*/React.createElement("button", {
+  }, "Edit"), archived && /*#__PURE__*/React.createElement("button", {
     className: "press",
-    onClick: () => fireReminderPeptide(p),
-    style: miniBtn
-  }, "Remind"), !archived && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStatus(p.id, 'active'),
+    style: {
+      ...miniBtn,
+      color: 'var(--green)',
+      borderColor: 'var(--sage-border)'
+    }
+  }, "Restore"), /*#__PURE__*/React.createElement("button", {
     className: "press",
-    onClick: () => dup(p),
+    onClick: () => setMenu(m => !m),
+    "aria-label": "More actions",
+    style: {
+      ...miniBtn,
+      fontWeight: 700,
+      letterSpacing: '.12em'
+    }
+  }, menu ? 'Close' : '⋯'),
+  /* Secondary actions — revealed only when the menu is open. */
+  menu && !archived && /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: () => {
+      dup(p);
+      setMenu(false);
+    },
     style: miniBtn
-  }, "Duplicate"), !archived && /*#__PURE__*/React.createElement("button", {
+  }, "Duplicate"), menu && !archived && /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: () => setStatus(p.id, p.status === 'paused' ? 'active' : 'paused'),
     style: miniBtn
-  }, p.status === 'paused' ? 'Resume' : 'Pause'), !archived && /*#__PURE__*/React.createElement("button", {
+  }, p.status === 'paused' ? 'Resume' : 'Pause'), menu && !archived && /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: () => setStatus(p.id, 'archived'),
     style: miniBtn
-  }, "Archive"), archived && /*#__PURE__*/React.createElement("button", {
-    className: "press",
-    onClick: () => setStatus(p.id, 'active'),
-    style: miniBtn
-  }, "Restore"), /*#__PURE__*/React.createElement("button", {
+  }, "Archive"), menu && /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: () => {
       if (confirm('Delete ' + p.name + '? This wipes its history.')) del(p.id);
@@ -4051,7 +4136,10 @@ function Shelf({
         position: 'relative'
       }
     }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => del(v.id),
+      onClick: () => {
+        if (confirm('Remove the ' + v.name + ' vial? This clears its reconstitution date and discard countdown.')) del(v.id);
+      },
+      "aria-label": "Remove vial",
       style: {
         position: 'absolute',
         top: 8,
@@ -4164,7 +4252,7 @@ function ReconWizard({
   const peptides = data.protocols.filter(p => p.kind === 'peptide');
   const [step, setStep] = useState(1);
   const [name, setName] = useState(peptides[0] ? peptides[0].name : '');
-  const [lifespan, setLifespan] = useState(peptides[0] ? peptides[0].lifespanDays : 31);
+  const [lifespan, setLifespan] = useState(peptides[0] ? peptides[0].lifespanDays : 30);
   const [reorderAt, setReorderAt] = useState(5);
   const [reconDate, setReconDate] = useState(keyOf(logicalNow()));
   const sel = peptides.find(x => x.name === name);
@@ -4401,7 +4489,7 @@ function ProtocolBuilder({
     cycleUnit: initial.schedule.cycleUnit || 'days',
     days: initial.schedule.days || [],
     skipWeekends: !!initial.skipWeekends,
-    lifespanDays: initial.lifespanDays || 31,
+    lifespanDays: initial.lifespanDays || 30,
     startDate: initial.startDate || '',
     endDate: initial.endDate || '',
     courseWeeks: initial.courseWeeks || ''
@@ -4424,7 +4512,7 @@ function ProtocolBuilder({
     cycleUnit: 'days',
     days: [],
     skipWeekends: false,
-    lifespanDays: 31,
+    lifespanDays: 30,
     startDate: '',
     endDate: '',
     courseWeeks: ''

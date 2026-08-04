@@ -1,4 +1,4 @@
-import { keyOf, localParts, logicalNowInTZ, dueProtocolsToday } from './schedule.js';
+import { keyOf, dateFromKey, addDays, localParts, logicalNowInTZ, effectiveBase, dueProtocolsToday } from './schedule.js';
 import { sendWebPush } from './webpush.js';
 
 const CORS = {
@@ -128,6 +128,78 @@ async function checkReminders(env, secrets) {
         body: session.dose ? `Planned dose: ${session.dose}` : 'Scheduled today',
         url: '/'
       });
+    }
+  }
+
+  // Once-daily morning digest (09:00 local): low-noise, at most one push per topic.
+  // Covers missed doses (yesterday), vial expiry/reorder, and pre-flight reconstitution.
+  const MORNING = 9 * 60;
+  if (inWindow(MORNING)) {
+    const logs = state.logs || {};
+
+    // (#7) Missed doses — evaluate the fully-finished previous day so a late dose
+    // isn't flagged prematurely.
+    const yKey = keyOf(addDays(today, -1));
+    const yDate = dateFromKey(yKey);
+    const yDoneDoses = (logs[yKey] || {}).doses || {};
+    const missed = dueProtocolsToday(state.protocols, yDate, yDate).filter(p => !yDoneDoses[p.id]);
+    if (missed.length) {
+      await fireOnce('missed', {
+        title: missed.length === 1 ? `Unlogged yesterday: ${missed[0].name}` : `${missed.length} doses unlogged yesterday`,
+        body: missed.map(p => p.name).join(', ') + ' — tap to log if you took it.',
+        url: '/'
+      });
+    }
+
+    // (#6) Vial expiry / reorder — mirrors the app's Shelf math.
+    for (const v of state.vials || []) {
+      if (!v.reconDate) continue;
+      const exp = addDays(dateFromKey(v.reconDate), Number(v.lifespanDays || 30));
+      const daysLeft = Math.ceil((exp - today) / 86400000);
+      let drawsLeft = null;
+      const p = (state.protocols || []).find(x => x.id === v.protocolId);
+      if (p && p.unit === 'U') {
+        const doseMcg = effectiveBase(p, today);
+        if (doseMcg && p.vialSizeMg) {
+          const capacity = Math.floor((p.vialSizeMg * 1000) / doseMcg);
+          let used = 0;
+          Object.keys(logs).forEach(k => {
+            if (k >= v.reconDate && logs[k].doses && logs[k].doses[p.id]) used++;
+          });
+          drawsLeft = Math.max(0, capacity - used);
+        }
+      }
+      const thr = v.reorderAt == null ? 0 : Number(v.reorderAt);
+      const lowDraws = drawsLeft != null && thr > 0 && drawsLeft <= thr;
+      if (daysLeft < 0 || daysLeft <= 3 || lowDraws) {
+        const parts = [daysLeft < 0 ? `expired ${Math.abs(daysLeft)}d ago` : `${daysLeft}d left`];
+        if (lowDraws) parts.push(`${drawsLeft} draws left`);
+        await fireOnce(`vial:${v.id}`, {
+          title: `${v.name} vial — ${daysLeft < 0 ? 'expired' : 'running low'}`,
+          body: parts.join(' · ') + '. Reconstitute a fresh vial soon.',
+          url: '/'
+        });
+      }
+    }
+
+    // (#8) Pre-flight: a compound starts within 3 days and no still-valid vial exists for it.
+    for (const p of state.protocols || []) {
+      if (p.status !== 'active' || !p.startDate) continue;
+      const start = dateFromKey(p.startDate);
+      const daysUntil = Math.round((start - today) / 86400000);
+      if (daysUntil < 0 || daysUntil > 3) continue;
+      const hasValidVial = (state.vials || []).some(v => {
+        if (v.protocolId !== p.id || !v.reconDate) return false;
+        const exp = addDays(dateFromKey(v.reconDate), Number(v.lifespanDays || 30));
+        return exp >= start;
+      });
+      if (!hasValidVial) {
+        await fireOnce(`preflight:${p.id}`, {
+          title: `${p.name} starts ${daysUntil === 0 ? 'today' : 'in ' + daysUntil + 'd'}`,
+          body: `Reconstitute your ${p.name} vial so it's ready in time.`,
+          url: '/'
+        });
+      }
     }
   }
 }
