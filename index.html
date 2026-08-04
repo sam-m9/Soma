@@ -1332,6 +1332,83 @@ function PreflightBanner({
     }
   }, pending.map(label).join(', '), " — no vial ready yet. Tap to reconstitute in Plans."));
 }
+/* Persistent in-app reminder: any dose whose time has passed today and still
+   isn't logged stays pinned to the top of the daily list until it's logged or
+   dismissed for the day. This is the reliable "stays on screen until dismissed"
+   surface on iOS, where push notifications can't be forced sticky. */
+function OutstandingBanner({
+  data,
+  setSelKey
+}) {
+  const now = new Date();
+  const today = logicalNow();
+  const todayKey = keyOf(today);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  let already = false;
+  try {
+    already = localStorage.getItem('soma-outstanding-dismissed') === todayKey;
+  } catch (e) {}
+  const [hidden, setHidden] = useState(already);
+  if (hidden) return null;
+  const doneDoses = ((data.logs || {})[todayKey] || {}).doses || {};
+  const overdue = (data.protocols || []).filter(p => {
+    if (p.kind !== 'peptide' || p.status !== 'active' || runsOn(p, today) !== 'on' || doneDoses[p.id]) return false;
+    if (!p.time) return true;
+    const [h, m] = p.time.split(':').map(Number);
+    return nowMin >= h * 60 + m; // only once the dose time has actually arrived
+  });
+  const ketDue = !data.ketArchived && (data.ketSessions || []).some(s => s.date === todayKey && !s.done);
+  if (!overdue.length && !ketDue) return null;
+  const items = overdue.map(p => p.name).concat(ketDue ? ['Ketamine session'] : []);
+  const dismiss = e => {
+    e.stopPropagation();
+    try {
+      localStorage.setItem('soma-outstanding-dismissed', todayKey);
+    } catch (er) {}
+    setHidden(true);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    onClick: () => setSelKey && setSelKey(todayKey),
+    style: {
+      position: 'relative',
+      background: 'var(--terra-tint)',
+      border: '1px solid var(--terra-border)',
+      borderRadius: 14,
+      padding: '12px 40px 12px 14px',
+      margin: '0 0 14px',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10,
+      letterSpacing: '.1em',
+      color: 'var(--terra)',
+      marginBottom: 3
+    }
+  }, items.length === 1 ? 'DUE — NOT LOGGED' : items.length + ' DUE — NOT LOGGED'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 13.5,
+      color: 'var(--charcoal)',
+      lineHeight: 1.45
+    }
+  }, items.join(', '), " — tap to log."), /*#__PURE__*/React.createElement("button", {
+    onClick: dismiss,
+    "aria-label": "Dismiss for today",
+    style: {
+      position: 'absolute',
+      top: 8,
+      right: 10,
+      background: 'none',
+      border: 'none',
+      color: 'var(--muted)',
+      fontSize: 18,
+      lineHeight: 1,
+      cursor: 'pointer'
+    }
+  }, "×"));
+}
 function ListTab({
   data,
   setData,
@@ -1509,7 +1586,10 @@ function ListTab({
     style: {
       padding: '2px 24px 130px'
     }
-  }, /*#__PURE__*/React.createElement(PreflightBanner, {
+  }, /*#__PURE__*/React.createElement(OutstandingBanner, {
+    data: data,
+    setSelKey: setSelKey
+  }), /*#__PURE__*/React.createElement(PreflightBanner, {
     data: data,
     setTab: setTab
   }), /*#__PURE__*/React.createElement("div", {

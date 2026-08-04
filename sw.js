@@ -16,6 +16,11 @@ self.addEventListener('push', event => {
     tag: data.tag || 'soma-reminder',
     icon: '/assets/icon.png',
     badge: '/assets/icon.png',
+    // Keep the notification on screen until the user acts on it (supported on
+    // Android/desktop; iOS ignores the flag but still holds it in Notification
+    // Center until swiped). renotify re-alerts if an updated push reuses the tag.
+    requireInteraction: true,
+    renotify: true,
     data: { url: data.url || '/' }
   };
   event.waitUntil(self.registration.showNotification(title, options));
