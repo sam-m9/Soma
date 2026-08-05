@@ -415,9 +415,12 @@ async function handleFetch(request, env) {
   }
 
   // Diagnostic: shows exactly what the Worker has stored and how it computes
-  // "now" and each dose's fire time. Visit /api/diag?key=YOUR_APP_SECRET.
+  // "now" and each dose's fire time. Reachable two ways: the app's in-app
+  // "Run diagnostics" button (Authorization header) or a browser link with
+  // ?key=YOUR_APP_SECRET.
   if (url.pathname === '/api/diag') {
-    if (!secrets.APP_SECRET || url.searchParams.get('key') !== secrets.APP_SECRET) {
+    const keyOk = secrets.APP_SECRET && url.searchParams.get('key') === secrets.APP_SECRET;
+    if (!keyOk && !authorized(request, secrets)) {
       return new Response('Forbidden', { status: 403 });
     }
     const subEntry = await env.SOMA_KV.get('push_sub', 'json');

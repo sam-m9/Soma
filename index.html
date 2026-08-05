@@ -5598,6 +5598,19 @@ function CloudSync({
     }).catch(() => setMsg('Backup failed.'));
   };
 
+  const runDiagnostics = () => {
+    setMsg('Checking the reminder server…');
+    fetch(base() + '/api/diag', {
+      headers: {
+        Authorization: 'Bearer ' + cfg.apiKey
+      }
+    }).then(r => r.json()).then(r => {
+      const tzWarn = !r.timezoneStored || /UTC|missing|no subscription/i.test(r.timezoneStored);
+      const lines = ['Timezone: ' + (r.timezoneStored || '?') + (tzWarn ? '  ⚠️ re-tap Enable push to fix' : ' ✓'), 'Server sees your local time as: ' + (r.localNow || '?'), 'Push subscription on file: ' + (r.pushSubscriptionOnFile ? 'yes' : 'no'), 'Latest data synced: ' + (r.stateOnFile ? 'yes' : 'no'), 'Due today: ' + (r.dueToday || []).map(x => x.name + ' @ ' + x.doseTime + (x.prefast ? ' (fast ' + x.prefast + ')' : '')).join('; ' ) || 'nothing'];
+      setMsg(lines.join('\n'));
+    }).catch(() => setMsg('Could not reach the reminder server.'));
+  };
+
   const pillBtn = {
     fontFamily: 'var(--mono)',
     fontSize: 10.5,
@@ -5712,7 +5725,11 @@ function CloudSync({
     className: "press",
     onClick: backupNow,
     style: ghostBtn
-  }, "Back up now")), backupStatus && /*#__PURE__*/React.createElement("div", {
+  }, "Back up now"), /*#__PURE__*/React.createElement("button", {
+    className: "press",
+    onClick: runDiagnostics,
+    style: ghostBtn
+  }, "Run diagnostics")), backupStatus && /*#__PURE__*/React.createElement("div", {
     className: "mono",
     style: {
       fontSize: 11.5,
@@ -5725,7 +5742,8 @@ function CloudSync({
       fontSize: 11.5,
       color: 'var(--secondary)',
       marginTop: 12,
-      lineHeight: 1.5
+      lineHeight: 1.5,
+      whiteSpace: 'pre-line'
     }
   }, msg));
 }
