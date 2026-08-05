@@ -819,7 +819,7 @@ function seed() {
     kind: 'peptide',
     name: 'CJC-1295 + Ipamorelin',
     group: 'Night',
-    time: '22:45',
+    time: '23:00',
     route: 'SubQ',
     unit: 'U',
     doseMcg: 200,
@@ -878,7 +878,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 11; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 12; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
@@ -5515,22 +5515,8 @@ function CloudSync({
   };
   useEffect(refreshBackupStatus, [cfg.apiUrl, cfg.apiKey]);
 
-  // Push whatever changes locally up to the Worker (debounced) so the cron-driven
-  // reminders and Drive backups always act on your latest protocols and logs.
-  useEffect(() => {
-    if (!authed()) return;
-    const t = setTimeout(() => {
-      fetch(base() + '/api/state', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer ' + cfg.apiKey
-        },
-        body: JSON.stringify(data)
-      }).catch(() => {});
-    }, 3000);
-    return () => clearTimeout(t);
-  }, [data, cfg.apiUrl, cfg.apiKey]);
+  // Note: the actual state-sync to the Worker runs app-wide in App() (see
+  // syncStateToWorker) so it happens on every tab, not just here on Plans.
 
   const saveCfg = () => {
     const next = {
@@ -7586,6 +7572,31 @@ function App() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(data));
     } catch (e) {}
+  }, [data]);
+
+  // App-wide sync to the reminder Worker (runs on every tab, debounced) so the
+  // cron always acts on the latest protocols, times, logs and vials — not just
+  // when the Plans tab happens to be open.
+  useEffect(() => {
+    let cfg;
+    try {
+      cfg = JSON.parse(localStorage.getItem(CLOUD_CFG_KEY)) || {};
+    } catch (e) {
+      cfg = {};
+    }
+    if (!cfg.apiUrl || !cfg.apiKey) return;
+    const base = cfg.apiUrl.replace(/\/$/, '');
+    const t = setTimeout(() => {
+      fetch(base + '/api/state', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + cfg.apiKey
+        },
+        body: JSON.stringify(data)
+      }).catch(() => {});
+    }, 2000);
+    return () => clearTimeout(t);
   }, [data]);
 
   // Whoop silent background sync on launch (best-effort): fills sleep + full detail

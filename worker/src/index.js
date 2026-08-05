@@ -414,6 +414,39 @@ async function handleFetch(request, env) {
     });
   }
 
+  // Diagnostic: shows exactly what the Worker has stored and how it computes
+  // "now" and each dose's fire time. Visit /api/diag?key=YOUR_APP_SECRET.
+  if (url.pathname === '/api/diag') {
+    if (!secrets.APP_SECRET || url.searchParams.get('key') !== secrets.APP_SECRET) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    const subEntry = await env.SOMA_KV.get('push_sub', 'json');
+    const stateRaw = await env.SOMA_KV.get('state');
+    const state = stateRaw ? JSON.parse(stateRaw) : null;
+    const tz = (subEntry && subEntry.timezone) || 'UTC';
+    const nowUTC = new Date();
+    const lp = localParts(tz, nowUTC);
+    const today = logicalNowInTZ(tz, nowUTC);
+    const fmtMin = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(((m % 60) + 60) % 60).padStart(2, '0');
+    const due = state ? dueProtocolsToday(state.protocols, today, today) : [];
+    return json({
+      serverTimeUTC: nowUTC.toISOString(),
+      pushSubscriptionOnFile: !!subEntry,
+      timezoneStored: subEntry ? (subEntry.timezone || '(missing — defaults to UTC!)') : '(no subscription)',
+      localNow: `${String(lp.h).padStart(2, '0')}:${String(lp.mi).padStart(2, '0')} on ${keyOf(today)}`,
+      stateOnFile: !!state,
+      dueTodayCount: due.length,
+      dueToday: due.map(p => ({
+        name: p.name,
+        doseTime: p.time,
+        firesAt: p.time,
+        prefast: p.fast && p.fast.beforeMin ? fmtMin((Number(p.time.split(':')[0]) * 60 + Number(p.time.split(':')[1])) - Number(p.fast.beforeMin)) : null,
+        postfast: p.fast && p.fast.afterMin ? fmtMin((Number(p.time.split(':')[0]) * 60 + Number(p.time.split(':')[1])) + Number(p.fast.afterMin)) : null
+      })),
+      allProtocolTimes: state ? (state.protocols || []).filter(p => p.kind === 'peptide').map(p => ({ name: p.name, time: p.time, start: p.startDate, status: p.status })) : []
+    });
+  }
+
   if (!url.pathname.startsWith('/api/')) return new Response('Not found', { status: 404 });
   if (!authorized(request, secrets)) return json({ error: 'unauthorized' }, { status: 401 });
 
