@@ -702,10 +702,10 @@ function seed() {
     time: '07:30',
     route: 'SubQ',
     unit: 'U',
-    doseMcg: 1200,
+    doseMcg: 1250,
     vialSizeMg: 10,
     bacWaterMl: 2.0,
-    dose: 24,
+    dose: 25,
     unitsManual: null,
     note: 'Morning cognitive dose. Food is fine.',
     schedule: {
@@ -729,7 +729,7 @@ function seed() {
     kind: 'peptide',
     name: 'Selank',
     group: 'Night',
-    time: '21:30',
+    time: '23:00',
     route: 'SubQ',
     unit: 'U',
     doseMcg: 500,
@@ -759,13 +759,13 @@ function seed() {
     kind: 'peptide',
     name: 'Kisspeptin-10',
     group: 'Night',
-    time: '21:30',
+    time: '23:00',
     route: 'SubQ',
     unit: 'U',
     doseMcg: 100,
     vialSizeMg: 5,
-    bacWaterMl: 2.0,
-    dose: 4,
+    bacWaterMl: 3.0,
+    dose: 6,
     unitsManual: null,
     note: 'Food is fine.',
     schedule: {
@@ -788,7 +788,7 @@ function seed() {
     kind: 'peptide',
     name: 'Epithalon',
     group: 'Night',
-    time: '21:30',
+    time: '23:00',
     route: 'SubQ',
     unit: 'U',
     doseMcg: 1000,
@@ -824,8 +824,8 @@ function seed() {
     unit: 'U',
     doseMcg: 200,
     vialSizeMg: 10,
-    bacWaterMl: 2.0,
-    dose: 4,
+    bacWaterMl: 3.0,
+    dose: 6,
     unitsManual: null,
     note: 'GH pulse. Fast 2 hr before and 30–45 min after (water only).',
     fast: {
@@ -878,7 +878,7 @@ function urlBase64ToUint8Array(base64String) {
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-const SEED_VERSION = 12; // bump when the built-in peptide specs change; triggers a one-time refresh
+const SEED_VERSION = 13; // bump when the built-in peptide specs change; triggers a one-time refresh
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
@@ -6861,11 +6861,11 @@ const EQUIPMENT = [
   ['Insulin syringes (U-100, 1 mL, 31G, 5/16")', '206', '3 boxes of 100'],
   ['Reconstitution syringes (3 mL Luer-Lok + 21–25G)', '11 sets', '2 packs of 10'],
   ['70% isopropyl alcohol prep pads', '437', '1 box of 500'],
-  ['Bacteriostatic water (10 mL vials)', '3–4', '4 vials (30-day discard)'],
+  ['Bacteriostatic water (10 mL vials)', '27 mL', '3–4 vials (30-day discard)'],
   ['Sharps disposal container', '1', '2–4 quart container']
 ];
 
-const INVENTORY_TOTALS = '11 vials total — 3 Semax · 2 Selank · 1 Kisspeptin · 1 Epithalon · 4 CJC/Ipamorelin. 22.0 mL BAC water consumed.';
+const INVENTORY_TOTALS = '11 vials total — 3 Semax · 2 Selank · 1 Kisspeptin · 1 Epithalon · 4 CJC/Ipamorelin. 27.0 mL BAC water consumed.';
 
 function pepScheduleLabel(p) {
   const s = p.schedule || {};
