@@ -908,35 +908,13 @@ const SEED_VERSION = 13; // bump when the built-in peptide specs change; trigger
 // One-time, idempotent cleanups for data saved by earlier builds (never wipes user entries).
 function migrate(d) {
   if (!d || !Array.isArray(d.protocols)) return d;
-  // Version refresh: fully restore the canonical spec (dosage and details) for the three
-  // built-in peptides, so editing dates or buttons can never leave them wrong. Only the
-  // operational, user-owned fields are preserved: start date, pauses and active/paused/archived state.
+  // Protocols, doses, times and schedules are fully user-owned. Once your data
+  // has been seeded, the app never overwrites or re-adds built-in peptides — so
+  // edits and deletions always stick. (Earlier builds force-refreshed them from
+  // the built-in spec on every version bump; that no longer happens.) The Guide's
+  // compound reference info is matched by id and shown only if the protocol still
+  // exists, so deleting a peptide cleanly removes it everywhere.
   if ((Number(d.seedVersion) || 0) < SEED_VERSION) {
-    const canon = {};
-    seed().protocols.forEach(p => {
-      canon[p.id] = p;
-    });
-    d.protocols.forEach(p => {
-      const c = canon[p.id];
-      if (!c) return;
-      // Keep a start date you've set; otherwise adopt the planned date from the spec (backfill only).
-      const keepStart = p.startDate || c.startDate || '';
-      const keepPauses = Array.isArray(p.pauses) ? p.pauses : [];
-      const keepStatus = p.status || 'active';
-      const fresh = JSON.parse(JSON.stringify(c)); // canonical dosage + details
-      fresh.startDate = keepStart; // when you begin is yours
-      fresh.endDate = ''; // derived from start + course length
-      fresh.pauses = keepPauses; // travel breaks are yours
-      fresh.status = keepStatus; // active / paused / archived is yours
-      Object.keys(p).forEach(k => delete p[k]);
-      Object.assign(p, fresh);
-    });
-    // Add any built-in protocols introduced in a newer seed that this saved data predates
-    // (e.g. Epithalon and CJC/Ipamorelin), so upgrades gain them without wiping user entries.
-    const haveIds = new Set(d.protocols.map(p => p.id));
-    seed().protocols.forEach(c => {
-      if (!haveIds.has(c.id)) d.protocols.push(JSON.parse(JSON.stringify(c)));
-    });
     d.seedVersion = SEED_VERSION;
   }
   // Belt-and-suspenders grammar fixups (harmless once already correct).
@@ -1823,7 +1801,8 @@ function ListTab({
     log: log,
     editLog: editLog,
     whoopUrl: data.whoopUrl,
-    selKey: selKey
+    selKey: selKey,
+    setData: setData
   }), undoState ? /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: doUndo,
@@ -1855,33 +1834,28 @@ function ListTab({
   }, "TAP WITHIN 5s TO REVERT")) : showClone && isToday && /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: cloneYesterday,
+    title: "Copy yesterday's logged routine into today",
     style: {
-      width: '100%',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
       background: '#fff',
-      border: '1px solid var(--hair)',
-      borderRadius: 18,
-      padding: '22px',
+      border: '1px solid var(--sage-border)',
+      borderRadius: 999,
+      padding: '9px 16px',
+      marginBottom: 20,
       cursor: 'pointer',
-      marginBottom: 24,
-      boxShadow: '0 2px 10px -4px rgba(41,37,36,.12)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "serif",
-    style: {
-      fontSize: 26,
-      fontStyle: 'italic',
+      color: 'var(--green)',
+      fontFamily: 'var(--mono)',
+      fontSize: 12,
       fontWeight: 600,
-      color: 'var(--charcoal)'
+      letterSpacing: '.04em',
+      boxShadow: '0 2px 8px -4px rgba(41,37,36,.15)'
     }
-  }, "Confirm yesterday's routine"), /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 11,
-      letterSpacing: '.14em',
-      marginTop: 5,
-      color: 'var(--muted)'
-    }
-  }, "REPLICATE ALL PRIOR-DAY INPUTS")), /*#__PURE__*/React.createElement(RoutineMeds, {
+  }, /*#__PURE__*/React.createElement(Rewind, {
+    c: '#1E3F20',
+    s: 15
+  }), "Copy Previous Day"), /*#__PURE__*/React.createElement(RoutineMeds, {
     data: data,
     setData: setData,
     log: log,
@@ -2671,7 +2645,8 @@ function Checkin({
   log,
   editLog,
   whoopUrl,
-  selKey
+  selKey,
+  setData
 }) {
   const [syncMsg, setSyncMsg] = useState('');
   const set = (f, v) => editLog(day => {
@@ -2697,20 +2672,49 @@ function Checkin({
           const cols = Object.keys(rows[0]);
           const dateCol = cols.find(c => /date/i.test(c)) || cols[0];
           const map = whoopColMap(cols);
-          const dayRows = rows.filter(r => csvDateKey(r[dateCol]) === selKey);
-          const match = bestSleepRow(dayRows, map);
-          if (match) {
-            const {
-              hours,
-              detail
-            } = extractSleep(match, map);
-            editLog(day => {
+          // Backfill EVERY day in the sheet (one main-sleep row per day), so the
+          // app's stored sleep aligns with the full WHOOP history — not just today.
+          const byDay = {};
+          rows.forEach(r => {
+            const key = csvDateKey(r[dateCol]);
+            if (!key) return;
+            (byDay[key] = byDay[key] || []).push(r);
+          });
+          const keys = Object.keys(byDay);
+          if (!keys.length) {
+            setSyncMsg('No dated rows found — check the sheet’s date column');
+            return;
+          }
+          setData(d => {
+            const n = JSON.parse(JSON.stringify(d));
+            keys.forEach(key => {
+              const r = bestSleepRow(byDay[key], map);
+              if (!r) return;
+              const {
+                hours,
+                detail
+              } = extractSleep(r, map);
+              if (hours == null && !detail) return;
+              const day = n.logs[key] || {
+                meds: {},
+                doses: {},
+                prn: {},
+                overrides: {},
+                mood: null,
+                spark: null,
+                sleep: null,
+                ket: null
+              };
               if (hours != null) day.sleep = hours;
-              day.sleepDetail = detail;
-              if (detail && detail.performance != null) day.sleepQuality = detail.performance;
+              if (detail) {
+                day.sleepDetail = detail;
+                if (detail.performance != null) day.sleepQuality = detail.performance;
+              }
+              n.logs[key] = day;
             });
-            setSyncMsg(detail ? 'Synced ✓ full sleep' : 'Synced ✓');
-          } else setSyncMsg('No matching day');
+            return n;
+          });
+          setSyncMsg('Synced ✓ ' + keys.length + ' day' + (keys.length > 1 ? 's' : '') + ' from the sheet');
         },
         error: () => setSyncMsg('Fetch failed (check sharing)')
       });
@@ -3474,7 +3478,7 @@ function PlansTab({
       marginBottom: 22
     }
   }, "The Plans"), /*#__PURE__*/React.createElement(DrawVisualizer, {
-    protocols: data.protocols.filter(p => p.kind === 'peptide' && p.unit === 'U')
+    protocols: data.protocols.filter(p => p.kind === 'peptide' && p.unit === 'U' && p.status === 'active')
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -6225,6 +6229,106 @@ const TREND_METRICS = [{
 function d_(l, f) {
   return l && l.sleepDetail ? l.sleepDetail[f] : null;
 }
+// Cross-metric pattern finder: relates sleep to mood/spark, computes dose
+// adherence + logging streak, and each active compound's effect on mood.
+function crossInsights(data) {
+  const out = [];
+  const logs = data.logs || {};
+  const keys = Object.keys(logs);
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const pct = (a, b) => Math.round((a - b) / Math.max(1, Math.abs(b)) * 100);
+  const withSleep = keys.filter(k => logs[k].sleep != null);
+
+  [['mood', 'Mood'], ['spark', 'Daily spark']].forEach(([f, label]) => {
+    const hi = avg(withSleep.filter(k => logs[k].sleep >= 7 && logs[k][f] != null).map(k => logs[k][f]));
+    const lo = avg(withSleep.filter(k => logs[k].sleep < 7 && logs[k][f] != null).map(k => logs[k][f]));
+    if (hi != null && lo != null) {
+      const d = pct(hi, lo);
+      out.push(label + ' runs ' + Math.abs(d) + '% ' + (d >= 0 ? 'higher' : 'lower') + ' after 7h+ sleep than on shorter nights.');
+    }
+  });
+
+  const today = logicalNow();
+  let scheduled = 0, taken = 0;
+  for (let i = 0; i < 30; i++) {
+    const d = addDays(today, -i);
+    const k = keyOf(d);
+    (data.protocols || []).filter(p => p.kind === 'peptide' && p.status === 'active').forEach(p => {
+      if (runsOn(p, d) === 'on') {
+        scheduled++;
+        if (logs[k] && logs[k].doses && logs[k].doses[p.id]) taken++;
+      }
+    });
+  }
+  if (scheduled > 0) out.push('Dose adherence (30d): ' + Math.round(taken / scheduled * 100) + '% — ' + taken + ' of ' + scheduled + ' scheduled doses logged.');
+
+  let streak = 0;
+  for (let i = 0; i < 400; i++) {
+    const l = logs[keyOf(addDays(today, -i))];
+    const any = l && ((l.doses && Object.keys(l.doses).length) || (l.meds && Object.values(l.meds).some(Boolean)) || l.mood != null || l.spark != null || l.sleep != null);
+    if (any) streak++;else break;
+  }
+  if (streak >= 2) out.push('Logging streak: ' + streak + ' days in a row.');
+
+  (data.protocols || []).filter(p => p.kind === 'peptide' && p.status === 'active' && p.startDate).forEach(p => {
+    const before = avg(keys.filter(k => k < p.startDate && logs[k].mood != null).map(k => logs[k].mood));
+    const after = avg(keys.filter(k => k >= p.startDate && logs[k].mood != null).map(k => logs[k].mood));
+    if (before != null && after != null) {
+      const d = pct(after, before);
+      if (Math.abs(d) >= 5) out.push('Mood is ' + Math.abs(d) + '% ' + (d >= 0 ? 'higher' : 'lower') + ' since starting ' + p.name + '.');
+    }
+  });
+  return out;
+}
+function TrendInsights({
+  data
+}) {
+  const items = crossInsights(data);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eyebrow",
+    style: {
+      marginBottom: 10
+    }
+  }, "Connected Insights"), !items.length ? /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 12.5,
+      color: 'var(--muted)',
+      lineHeight: 1.5
+    }
+  }, "Log sleep, mood, spark and doses across a few days and cross-relationships will surface here.") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid var(--hair)',
+      borderRadius: 18,
+      padding: '6px 18px'
+    }
+  }, items.map((t, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      gap: 10,
+      padding: '13px 0',
+      borderTop: i ? '1px solid var(--hair)' : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: 'var(--sage)',
+      flexShrink: 0
+    }
+  }, "◉"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: 'var(--body)',
+      fontSize: 13.5,
+      color: 'var(--secondary)',
+      lineHeight: 1.5
+    }
+  }, t)))));
+}
 function TrendsTab({
   data
 }) {
@@ -6559,7 +6663,9 @@ function TrendsTab({
       marginTop: 12,
       color: 'var(--green)'
     }
-  }, insight)));
+  }, insight)), /*#__PURE__*/React.createElement(TrendInsights, {
+    data: data
+  }));
 }
 function Legend({
   swatch,
@@ -6966,6 +7072,29 @@ const EQUIPMENT = [
 
 const INVENTORY_TOTALS = '11 vials total — 3 Semax · 2 Selank · 1 Kisspeptin · 1 Epithalon · 4 CJC/Ipamorelin. 27.0 mL BAC water consumed.';
 
+// Live timeline status for a protocol, derived from its own start/course — so
+// the Guide reflects reality as plans shift (upcoming → active → ended).
+function protocolTimeline(p, today) {
+  if (!p.startDate) return { state: 'unscheduled', order: 2, badge: 'No date', badgeColor: 'var(--muted)', sub: 'Set a start date to place it on the timeline' };
+  const start = dateFromKey(p.startDate);
+  const endK = courseEndKey(p);
+  const end = endK ? dateFromKey(endK) : null;
+  const day = 86400000;
+  const startsIn = Math.round((start - today) / day);
+  if (startsIn > 0) {
+    return { state: 'upcoming', order: 1, badge: startsIn === 1 ? 'Starts tomorrow' : 'Starts in ' + startsIn + 'd', badgeColor: 'var(--amber)', sub: p.startDate + (endK ? ' → ' + endK : '') };
+  }
+  if (end && today > end) {
+    return { state: 'ended', order: 3, badge: 'Completed', badgeColor: 'var(--muted)', sub: p.startDate + ' → ' + endK };
+  }
+  const wk = courseWeekNow(p, today);
+  const totalW = p.courseWeeks || (p.courseDays ? Math.ceil(p.courseDays / 7) : null);
+  const daysLeft = end ? Math.max(0, Math.round((end - today) / day)) : null;
+  const parts = [];
+  if (wk && totalW) parts.push('Week ' + wk + ' of ' + totalW);
+  if (endK) parts.push('ends ' + endK);
+  return { state: 'active', order: 0, badge: daysLeft != null ? daysLeft + 'd left' : 'Active', badgeColor: 'var(--sage)', sub: parts.join(' · ') || 'In progress' };
+}
 function pepScheduleLabel(p) {
   const s = p.schedule || {};
   if (s.type === 'everyday') return p.courseDays ? p.courseDays + ' consecutive days' : 'Daily';
@@ -7184,7 +7313,7 @@ function PeptidesTab({
       lineHeight: 1.6,
       margin: '0 0 8px'
     }
-  }, "Your full protocol in one place — compounds, dosing, reconstitution and the phase timeline. Numbers update live with your plan."), /*#__PURE__*/React.createElement("div", {
+  }, "Your full protocol in one place — compounds, dosing, reconstitution and a live timeline. Everything updates as your plan changes."), /*#__PURE__*/React.createElement("div", {
     style: {
       fontFamily: 'var(--body)',
       fontSize: 11.5,
@@ -7194,48 +7323,41 @@ function PeptidesTab({
       margin: '0 0 26px'
     }
   }, "For informational purposes only. For medical advice or diagnosis, consult a professional."),
-  /* Phase timeline */
+  /* Live timeline — computed from each protocol's own start/course, ordered
+     active → upcoming → ended, so it stays true as plans shift. */
   /*#__PURE__*/React.createElement("div", {
     className: "eyebrow",
     style: eyebrow
-  }, "Protocol Timeline"), PROTOCOL_PHASES.map(ph => /*#__PURE__*/React.createElement("div", {
-    key: ph.n,
-    style: {
-      background: '#fff',
-      border: '1px solid var(--hair)',
-      borderRadius: 16,
-      padding: '15px 17px',
-      marginBottom: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'baseline',
-      gap: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "serif",
-    style: {
-      fontSize: 19,
-      fontWeight: 600
-    }
-  }, "Phase ", ph.n, " · ", ph.name), /*#__PURE__*/React.createElement("div", {
-    className: "mono",
-    style: {
-      fontSize: 10.5,
-      color: 'var(--sage)',
-      whiteSpace: 'nowrap'
-    }
-  }, ph.span)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontFamily: 'var(--body)',
-      fontSize: 13.5,
-      color: 'var(--secondary)',
-      lineHeight: 1.55,
-      marginTop: 6
-    }
-  }, ph.body))),
+  }, "Protocol Timeline"), (() => {
+    const today = logicalNow();
+    const rows = sorted.map(p => ({ p, t: protocolTimeline(p, today) })).sort((a, b) => a.t.order - b.t.order);
+    if (!rows.length) return /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: { fontSize: 13, color: 'var(--muted)', padding: '2px 2px 8px' }
+    }, "No peptides yet. Add one from the + menu and it appears here.");
+    return rows.map(({ p, t }) => /*#__PURE__*/React.createElement("div", {
+      key: p.id,
+      style: {
+        background: t.state === 'ended' ? 'var(--desk)' : '#fff',
+        border: '1px solid var(--hair)',
+        borderRadius: 16,
+        padding: '14px 16px',
+        marginBottom: 10,
+        opacity: t.state === 'ended' ? 0.7 : 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "serif",
+      style: { fontSize: 19, fontWeight: 600 }
+    }, p.name), /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: { fontSize: 10.5, fontWeight: 600, color: t.badgeColor, whiteSpace: 'nowrap' }
+    }, t.badge)), /*#__PURE__*/React.createElement("div", {
+      className: "mono",
+      style: { fontSize: 12, color: 'var(--secondary)', marginTop: 5 }
+    }, t.sub)));
+  })(),
   /* Compounds */
   /*#__PURE__*/React.createElement("div", {
     className: "eyebrow",
