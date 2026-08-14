@@ -1793,6 +1793,11 @@ function ListTab({
       background: 'var(--hair)',
       margin: '14px 0 20px'
     }
+  }), /*#__PURE__*/React.createElement(Checkin, {
+    log: log,
+    editLog: editLog,
+    whoopUrl: data.whoopUrl,
+    selKey: selKey
   }), undoState ? /*#__PURE__*/React.createElement("button", {
     className: "press",
     onClick: doUndo,
@@ -1957,11 +1962,6 @@ function ListTab({
   })), ketToday && !data.ketArchived && /*#__PURE__*/React.createElement(KetamineCard, {
     sess: ketToday,
     setData: setData
-  }), /*#__PURE__*/React.createElement(Checkin, {
-    log: log,
-    editLog: editLog,
-    whoopUrl: data.whoopUrl,
-    selKey: selKey
   }), planOpen && /*#__PURE__*/React.createElement(DayPlanSheet, {
     data: data,
     sel: sel,
@@ -2577,6 +2577,69 @@ function KetamineCard({
   }));
 }
 
+/* One-tap 5-level scale (emoji). Stores on the existing 1–10 scale (2/4/6/8/10)
+   so Trends and history keep working unchanged. */
+function EmojiScale({
+  label,
+  value,
+  emojis,
+  levels,
+  onChange,
+  color,
+  tint
+}) {
+  const sel = value == null ? -1 : Math.min(4, Math.max(0, Math.round(value / 2) - 1));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'baseline',
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      letterSpacing: '.12em',
+      color: 'var(--muted)'
+    }
+  }, label.toUpperCase()), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: sel < 0 ? 'var(--muted)' : color
+    }
+  }, sel < 0 ? 'Tap one' : levels[sel])), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, emojis.map((em, i) => /*#__PURE__*/React.createElement("button", {
+    key: i,
+    className: "press",
+    "aria-label": levels[i],
+    onClick: () => onChange((i + 1) * 2),
+    style: {
+      flex: 1,
+      padding: '12px 0',
+      fontSize: 26,
+      lineHeight: 1,
+      borderRadius: 14,
+      cursor: 'pointer',
+      border: '1px solid ' + (sel === i ? color : 'var(--hair)'),
+      background: sel === i ? tint : '#fff',
+      transform: sel === i ? 'scale(1.06)' : 'none',
+      filter: sel === i ? 'none' : 'grayscale(0.4)',
+      opacity: sel === i || sel < 0 ? 1 : 0.6,
+      transition: 'transform .12s, background .12s'
+    }
+  }, em))));
+}
 /* ---- Daily check-in ---- */
 function Checkin({
   log,
@@ -2643,15 +2706,22 @@ function Checkin({
       fontWeight: 600,
       marginBottom: 18
     }
-  }, "How was today?"), /*#__PURE__*/React.createElement(SliderRow, {
+  }, "How was today?"), /*#__PURE__*/React.createElement(EmojiScale, {
     label: "Mood",
     value: log.mood,
-    onChange: v => set('mood', v)
-  }), /*#__PURE__*/React.createElement(SliderRow, {
+    emojis: ['😖', '😕', '😐', '🙂', '😄'],
+    levels: ['Rough', 'Low', 'OK', 'Good', 'Great'],
+    onChange: v => set('mood', v),
+    color: 'var(--green)',
+    tint: 'var(--sage-tint)'
+  }), /*#__PURE__*/React.createElement(EmojiScale, {
     label: "Daily Spark",
     value: log.spark,
+    emojis: ['😴', '😑', '🙂', '⚡', '🔥'],
+    levels: ['Flat', 'Low', 'Steady', 'High', 'Wired'],
     onChange: v => set('spark', v),
-    terra: true
+    color: 'var(--terra)',
+    tint: 'var(--terra-tint)'
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 18

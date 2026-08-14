@@ -131,6 +131,19 @@ async function checkReminders(env, secrets) {
     }
   }
 
+  // Mood + spark check-in nudge at 22:30 local — only if not already captured today.
+  const CHECKIN_TIME = 22 * 60 + 30;
+  if (inWindow(CHECKIN_TIME)) {
+    const todayLog = (state.logs || {})[todayKey] || {};
+    if (todayLog.mood == null || todayLog.spark == null) {
+      await fireOnce('checkin', {
+        title: 'How was today?',
+        body: 'Tap your mood and daily spark — a couple seconds before bed.',
+        url: '/'
+      });
+    }
+  }
+
   // Once-daily morning digest (09:00 local): low-noise, at most one push per topic.
   // Covers missed doses (yesterday), vial expiry/reorder, and pre-flight reconstitution.
   const MORNING = 9 * 60;
