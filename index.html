@@ -533,22 +533,48 @@ function whoopColMap(cols) {
   return map;
 }
 const DETAIL_KEYS = ['performance', 'efficiency', 'consistency', 'rem', 'deep', 'light', 'awake', 'inBed', 'cycles', 'disturbances', 'respRate', 'need'];
+// Parse a sleep duration into hours, tolerating the formats WHOOP/Sheets emit:
+// decimal hours ("7.5"), "hh:mm" ("7:30"), or minutes ("450" -> 7.5h).
+function toHours(raw) {
+  if (raw == null || raw === '') return null;
+  const s = String(raw).trim();
+  const t = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(s); // hh:mm or hh:mm:ss
+  if (t) return round1(Number(t[1]) + Number(t[2]) / 60);
+  const v = parseFloat(s.replace(/[^0-9.\-]/g, ''));
+  if (isNaN(v)) return null;
+  // No real night exceeds 24h, so a larger number is minutes — convert.
+  return round1(v > 24 ? v / 60 : v);
+}
 function extractSleep(row, map) {
   const num = c => {
     if (!c || row[c] == null || row[c] === '') return null;
     const v = parseFloat(String(row[c]).replace(/[^0-9.\-]/g, ''));
     return isNaN(v) ? null : v;
   };
-  const hours = num(map.hours);
+  const hours = map.hours ? toHours(row[map.hours]) : null;
   const detail = {};
   DETAIL_KEYS.forEach(k => {
     const v = num(map[k]);
     if (v != null) detail[k] = v;
   });
   return {
-    hours: hours == null ? null : round1(hours),
+    hours,
     detail: Object.keys(detail).length ? detail : null
   };
+}
+// From rows sharing one day, pick the real night (largest sleep duration) so
+// naps or partial rows don't override the main sleep.
+function bestSleepRow(rows, map) {
+  let best = null;
+  let bestH = -1;
+  rows.forEach(r => {
+    const { hours } = extractSleep(r, map);
+    if (hours != null && hours > bestH) {
+      bestH = hours;
+      best = r;
+    }
+  });
+  return best || rows[0] || null;
 }
 
 /* ============================================================
@@ -2671,7 +2697,8 @@ function Checkin({
           const cols = Object.keys(rows[0]);
           const dateCol = cols.find(c => /date/i.test(c)) || cols[0];
           const map = whoopColMap(cols);
-          const match = rows.find(r => csvDateKey(r[dateCol]) === selKey);
+          const dayRows = rows.filter(r => csvDateKey(r[dateCol]) === selKey);
+          const match = bestSleepRow(dayRows, map);
           if (match) {
             const {
               hours,
@@ -5891,15 +5918,17 @@ function Backup({
     }
   };
   const buildCSV = () => {
-    const rows = [['date', 'type', 'name', 'dose', 'unit', 'group', 'mood', 'spark', 'sleep']];
+    // One row per day: sleep/mood/spark appear once, with the day's doses and
+    // meds collapsed into single cells. Avoids the old one-line-per-item format.
+    const rows = [['date', 'mood', 'spark', 'sleep_hours', 'sleep_quality', 'doses_taken', 'meds_taken']];
     Object.keys(data.logs).sort().forEach(k => {
       const l = data.logs[k];
-      Object.values(l.doses || {}).forEach(dz => rows.push([k, 'dose', dz.name, dz.dose, dz.unit, dz.group, l.mood, l.spark, l.sleep]));
-      (data.meds || []).forEach(m => {
-        if (l.meds && l.meds[m.id]) rows.push([k, 'med', m.name, '', '', m.group, l.mood, l.spark, l.sleep]);
-      });
+      const doses = Object.values(l.doses || {}).map(dz => dz.name + (dz.dose ? ' ' + dz.dose + (dz.unit || '') : '')).join('; ');
+      const meds = (data.meds || []).filter(m => l.meds && l.meds[m.id]).map(m => m.name).join('; ');
+      if (!doses && !meds && l.mood == null && l.spark == null && l.sleep == null) return; // skip empty days
+      rows.push([k, l.mood ?? '', l.spark ?? '', l.sleep ?? '', l.sleepQuality ?? '', doses, meds]);
     });
-    return rows.map(r => r.map(c => `"${c ?? ''}"`).join(',')).join('\n');
+    return rows.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   };
   const exportJSON = () => save(JSON.stringify(data, null, 2), 'soma-backup-' + stamp() + '.json', 'application/json', 'json');
   const exportCSV = () => save(buildCSV(), 'soma-history-' + stamp() + '.csv', 'text/csv', 'csv');
@@ -7701,12 +7730,20 @@ function App() {
           const cols = Object.keys(rows[0]);
           const dateCol = cols.find(c => /date/i.test(c)) || cols[0];
           const map = whoopColMap(cols);
+          // Group rows by day and keep the main sleep (largest duration) per day,
+          // so naps or partial rows don't create duplicates or override the night.
+          const byDay = {};
+          rows.forEach(r => {
+            const key = csvDateKey(r[dateCol]);
+            if (!key) return;
+            (byDay[key] = byDay[key] || []).push(r);
+          });
           setData(d => {
             const n = JSON.parse(JSON.stringify(d));
             let touched = false;
-            rows.forEach(r => {
-              const key = csvDateKey(r[dateCol]);
-              if (!key) return;
+            Object.keys(byDay).forEach(key => {
+              const r = bestSleepRow(byDay[key], map);
+              if (!r) return;
               const {
                 hours,
                 detail
@@ -7722,7 +7759,8 @@ function App() {
                 sleep: null,
                 ket: null
               };
-              if (day.sleep == null && hours != null) {
+              // Fill when empty, and self-heal any previously stored bad value (>24 = minutes).
+              if (hours != null && (day.sleep == null || day.sleep > 24)) {
                 day.sleep = hours;
                 touched = true;
               }
