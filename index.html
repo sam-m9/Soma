@@ -690,6 +690,11 @@ function seed() {
     name: 'Auvelity (AM)',
     group: 'Morning'
   }, {
+    id: 'pp',
+    initials: 'PP',
+    name: 'PP',
+    group: 'Morning'
+  }, {
     id: 'au2',
     initials: 'AU2',
     name: 'Auvelity (PM)',
@@ -699,26 +704,6 @@ function seed() {
     initials: 'KSM',
     name: 'KSM-66',
     group: 'Evening'
-  }, {
-    id: 'gu1',
-    initials: 'GU1',
-    name: 'Guanfacine (1)',
-    group: 'Evening'
-  }, {
-    id: 'gu2',
-    initials: 'GU2',
-    name: 'Guanfacine (2)',
-    group: 'Night'
-  }, {
-    id: 'day',
-    initials: 'DAY',
-    name: 'Dayvigo 10mg',
-    group: 'Night'
-  }, {
-    id: 'dox',
-    initials: 'DOX',
-    name: 'Doxepin 10mg',
-    group: 'Night'
   }];
   const protocols = [{
     id: 'semax',
@@ -923,6 +908,19 @@ function migrate(d) {
     if (typeof p.note === 'string' && p.note.indexOf('Take ~1 hr') === 0) p.note = 'Take about 1 hour before sleep to support deep REM. Food is fine.';
   });
   if (!Array.isArray(d.bacBottles)) d.bacBottles = []; // BAC water bottle tracker (added later)
+  // One-time med-list update (requested): Morning = Auvelity AM + PP;
+  // Evening = Auvelity PM + KSM-66; Night cleared. Runs once, then meds are
+  // fully user-owned again (add/remove freely in the app).
+  if (!d.medsRev || Number(d.medsRev) < 1) {
+    const remove = new Set(['gu1', 'gu2', 'day', 'dox']);
+    d.meds = (Array.isArray(d.meds) ? d.meds : []).filter(m => !remove.has(m.id));
+    if (!d.meds.some(m => m.id === 'pp')) {
+      const pp = { id: 'pp', initials: 'PP', name: 'PP', group: 'Morning' };
+      const i = d.meds.findIndex(m => m.id === 'au1');
+      if (i >= 0) d.meds.splice(i + 1, 0, pp);else d.meds.push(pp);
+    }
+    d.medsRev = 1;
+  }
   return d;
 }
 function loadData() {
