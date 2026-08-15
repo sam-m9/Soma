@@ -921,6 +921,11 @@ function migrate(d) {
     }
     d.medsRev = 1;
   }
+  // Rev 2: remove any PP from the Evening group (keep the Morning one).
+  if (Number(d.medsRev) < 2) {
+    d.meds = (Array.isArray(d.meds) ? d.meds : []).filter(m => !(m.group === 'Evening' && (m.name === 'PP' || m.initials === 'PP')));
+    d.medsRev = 2;
+  }
   return d;
 }
 function loadData() {
