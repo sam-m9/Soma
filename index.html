@@ -773,10 +773,10 @@ function seed() {
     time: '23:00',
     route: 'SubQ',
     unit: 'U',
-    doseMcg: 100,
-    vialSizeMg: 5,
-    bacWaterMl: 3.0,
-    dose: 6,
+    doseMcg: 250,
+    vialSizeMg: 10,
+    bacWaterMl: 2.0,
+    dose: 5,
     unitsManual: null,
     note: 'Food is fine.',
     schedule: {
@@ -788,7 +788,8 @@ function seed() {
     },
     startDate: '2026-08-17',
     endDate: '',
-    courseWeeks: 12,
+    courseWeeks: 13,
+    courseDays: 92,
     phases: [],
     titrations: [],
     pauses: [],
@@ -925,6 +926,26 @@ function migrate(d) {
   if (Number(d.medsRev) < 2) {
     d.meds = (Array.isArray(d.meds) ? d.meds : []).filter(m => !(m.group === 'Evening' && (m.name === 'PP' || m.initials === 'PP')));
     d.medsRev = 2;
+  }
+  // One-time targeted protocol updates (requested changes that must reach
+  // existing installs even though protocols are otherwise user-owned).
+  if (!d.protoRev || Number(d.protoRev) < 1) {
+    const kiss = (d.protocols || []).find(p => p.id === 'kiss');
+    if (kiss) {
+      // Updated Kisspeptin: 10 mg vial, 2.0 mL BAC, 250 µg = 5 U, M/W/F, 40 doses.
+      kiss.doseMcg = 250;
+      kiss.vialSizeMg = 10;
+      kiss.bacWaterMl = 2.0;
+      kiss.dose = 5;
+      kiss.unitsManual = null;
+      kiss.courseWeeks = 13;
+      kiss.courseDays = 92;
+      if (kiss.schedule) {
+        kiss.schedule.type = 'specific';
+        kiss.schedule.days = [1, 3, 5];
+      }
+    }
+    d.protoRev = 1;
   }
   return d;
 }
@@ -7011,7 +7032,7 @@ const PEPTIDE_REF = {
     tagline: 'LH & testosterone',
     mechanism: 'Full agonist at the GPR54 (KiSS1R) receptor on hypothalamic neurons.',
     effects: 'Triggers high-amplitude, pulsatile GnRH release, stimulating Luteinizing Hormone (LH) and testosterone production.',
-    totalDoses: 36
+    totalDoses: 40
   },
   epithalon: {
     tagline: 'Circadian & longevity',
