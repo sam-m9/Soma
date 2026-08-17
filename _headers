@@ -1,0 +1,9 @@
+# Always revalidate the app shell and service worker so new Cloudflare Pages
+# deploys are picked up immediately instead of served stale from cache
+# (important for the iOS home-screen PWA).
+/
+  Cache-Control: no-cache, must-revalidate
+/index.html
+  Cache-Control: no-cache, must-revalidate
+/sw.js
+  Cache-Control: no-cache, must-revalidate

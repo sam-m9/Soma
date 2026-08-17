@@ -880,6 +880,9 @@ function seed() {
    ============================================================ */
 const STORE_KEY = 'soma-v1';
 const CLOUD_CFG_KEY = 'soma-cloud-cfg';
+// Visible build stamp — bump on each meaningful deploy so you can confirm the
+// live app updated (shown in Plans → Reminders & Cloud Backup and diagnostics).
+const APP_BUILD = 'build 15 · 2026-08-04';
 // Public VAPID key for Web Push — safe to expose; paired with a private key held only in the Worker.
 const VAPID_PUBLIC_KEY = 'BME5aepc23cm_AKyxh5IfR-AcJtYSR-yApWVBCmcXTUKFjlwqmfRGb7swtb8lMceHnAgH8gkJJ0tidKK-uMky4c';
 function urlBase64ToUint8Array(base64String) {
@@ -5731,7 +5734,7 @@ function CloudSync({
       }
     }).then(r => r.json()).then(r => {
       const tzWarn = !r.timezoneStored || /UTC|missing|no subscription/i.test(r.timezoneStored);
-      const lines = ['Timezone: ' + (r.timezoneStored || '?') + (tzWarn ? '  ⚠️ re-tap Enable push to fix' : ' ✓'), 'Server sees your local time as: ' + (r.localNow || '?'), 'Push subscription on file: ' + (r.pushSubscriptionOnFile ? 'yes' : 'no'), 'Latest data synced: ' + (r.stateOnFile ? 'yes' : 'no'), 'Due today: ' + (r.dueToday || []).map(x => x.name + ' @ ' + x.doseTime + (x.prefast ? ' (fast ' + x.prefast + ')' : '')).join('; ' ) || 'nothing'];
+      const lines = [APP_BUILD, 'Timezone: ' + (r.timezoneStored || '?') + (tzWarn ? '  ⚠️ re-tap Enable push to fix' : ' ✓'), 'Server sees your local time as: ' + (r.localNow || '?'), 'Push subscription on file: ' + (r.pushSubscriptionOnFile ? 'yes' : 'no'), 'Latest data synced: ' + (r.stateOnFile ? 'yes' : 'no'), 'Due today: ' + ((r.dueToday || []).map(x => x.name + ' @ ' + x.doseTime + (x.prefast ? ' (fast ' + x.prefast + ')' : '')).join('; ') || 'nothing')];
       setMsg(lines.join('\n'));
     }).catch(() => setMsg('Could not reach the reminder server.'));
   };
@@ -5789,7 +5792,15 @@ function CloudSync({
       lineHeight: 1.6,
       margin: '8px 0 14px'
     }
-  }, "Connects Soma to your soma-api Worker for real push notifications (fires even if the app is closed) and automatic Google Drive backups."), editing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+  }, "Connects Soma to your soma-api Worker for real push notifications (fires even if the app is closed) and automatic Google Drive backups."), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      letterSpacing: '.06em',
+      color: 'var(--muted)',
+      margin: '-6px 0 14px'
+    }
+  }, APP_BUILD.toUpperCase()), editing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
     type: "text",
     placeholder: "https://soma-api.your-subdomain.workers.dev",
     value: draftUrl,
